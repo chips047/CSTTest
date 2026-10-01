@@ -105,7 +105,7 @@ class SettingsWindow(FloatingWindowGPU):
             scroll_areas: list
         ) -> QWidget:
 
-        page_area = Widgets.ElasticScrollArea(self)
+        page_area = Widgets.ElasticScrollArea(self, Styles.Colors.Floating.Background)
         page_area.setFixedHeight(360)
 
         navigation_button = Widgets.NavButton(page_name)

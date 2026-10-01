@@ -32,10 +32,12 @@ class ErrorWindow(FloatingWindowGPU):
             description_text: str,
             button_text:      str            = "Cool",
             allow_report:     bool           = False,
-            parent:           QWidget | None = None
+            parent:           QWidget | None = None,
+            *args,
+            **kwargs
         ) -> None:
 
-        super().__init__(title, parent = parent)
+        super().__init__(title, parent = parent, *args, **kwargs)
 
         self.description_text      = description_text
         self.allow_report          = allow_report

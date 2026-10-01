@@ -34,7 +34,7 @@ class ExportDialogWindow(FloatingWindowGPU):
 
         self.combobox          = Widgets.Selector(choices, default_index = len(choices) - 1)
         self.watermark_textbox = Widgets.Textbox("text", max_length = 12, placeholder = "Dot Watermark")
-        self.ringtone_checkbox = Widgets.Checkbox("Transfer to phone ringtones", default = False)
+        self.ringtone_checkbox = Widgets.Checkbox("Transfer to phone", default = False)
 
         button_row = Widgets.ButtonRow(
             [

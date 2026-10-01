@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
@@ -9,20 +11,6 @@ from datetime import datetime
 from functools import partial
 
 from loguru import logger
-
-logger.debug("Imported standard libraries")
-
-if getattr(sys, "frozen", False):
-    base_directory = sys._MEIPASS
-
-else:
-    base_directory = os.path.dirname(os.path.abspath(__file__))
-
-os.chdir(base_directory)
-sys.path.insert(0, base_directory)
-
-logger.debug(f"Set base directory: {base_directory}")
-logger.debug(f"Mode determination: {'Frozen' if getattr(sys, 'frozen', False) else 'Script'}")
 
 from PyQt6.QtCore import (
     Qt,
@@ -44,9 +32,9 @@ from PyQt6.QtGui import (
     QMoveEvent,
     QCloseEvent,
     QPaintEvent,
-    QResizeEvent,
     QFontMetrics,
     QKeySequence,
+    QResizeEvent,
     QFontDatabase,
     QSurfaceFormat
 )
@@ -58,8 +46,6 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QGraphicsOpacityEffect
 )
-
-logger.debug("Imported PyQt6 modules")
 
 from System.Common import (
     Utils,
@@ -80,15 +66,22 @@ from System.Services import (
 from System.Views.ProjectMenu import MainMenu
 from System.Views.Compositor import CompositorWidget
 
-logger.debug("Imported system modules")
+if getattr(sys, "frozen", False):
+    base_directory = sys._MEIPASS
 
-# Initialization
+else:
+    base_directory = os.path.dirname(os.path.abspath(__file__))
+
+os.chdir(base_directory)
+sys.path.insert(0, base_directory)
+
+# Exception Handling
 
 is_processing_exception = False
 
 def handle_exception(
-        exception_type:      object,
-        exception_value:     object,
+        exception_type:      type[BaseException],
+        exception_value:     BaseException,
         exception_traceback: object
     ) -> None:
 
@@ -145,12 +138,12 @@ sys.excepthook       = handle_exception
 threading.excepthook = handle_thread_exception
 Utils.setup_exe_logging()
 
-# Logic Classes
+# Window Effects
 
 class WindowEffectManager:
     CHANCE = 0.005
 
-    STARTUP_DATA = [
+    STARTUP_EASTER_EGGS = [
         {
             "name":    "bunny",
             "content": "System/Assets/Image/Woah.png"
@@ -193,19 +186,19 @@ class WindowEffectManager:
     def __init__(self, window: QMainWindow) -> None:
         self.window = window
 
-        self.shake_sound_count       = 0
-        self.shake_threshold         = 1500
-        self.last_shake_x_position   = 0
-        self.shake_direction         = 0
-        self.shake_direction_changes = 0
-        self.last_shake_time         = 0
+        self.shake_sound_count              = 0
+        self.shake_threshold                = 1500
+        self.last_shake_horizontal_position = 0
+        self.shake_direction                = 0
+        self.shake_direction_changes        = 0
+        self.last_shake_time                = 0.0
 
-        self.last_area               = window.width() * window.height()
-        self.resize_direction        = 0
-        self.direction_changes       = 0
-        self.last_change_time        = 0
-        self.last_accordion_time     = 0
-        self.is_accordion_active     = False
+        self.last_window_area               = window.width() * window.height()
+        self.resize_direction               = 0
+        self.direction_changes              = 0
+        self.last_change_time               = 0.0
+        self.last_accordion_time            = 0.0
+        self.is_accordion_active            = False
 
         self.accordion_stop_timer = Timing.Timer(
             2000,
@@ -221,16 +214,14 @@ class WindowEffectManager:
 
     def process_window_move(
             self,
-            horizontal_position: int,
-            vertical_position:   int
+            horizontal_position:      int,
+            unused_vertical_position: int
         ) -> None:
 
-        del vertical_position
-
         current_time     = time.time()
-        horizontal_delta = horizontal_position - self.last_shake_x_position
+        horizontal_delta = horizontal_position - self.last_shake_horizontal_position
 
-        self.last_shake_x_position = horizontal_position
+        self.last_shake_horizontal_position = horizontal_position
 
         if abs(horizontal_delta) < 5:
             return
@@ -277,21 +268,16 @@ class WindowEffectManager:
 
         current_time = time.time()
         current_area = width * height
+        delta_time   = (current_time - self.last_accordion_time) if self.last_accordion_time > 0 else 0.01
 
-        if self.last_accordion_time > 0:
-            delta_time = current_time - self.last_accordion_time
-
-        else:
-            delta_time = 0.01
-
-        area_difference = current_area - self.last_area
+        area_difference = current_area - self.last_window_area
         velocity        = abs(area_difference) / delta_time
 
         minimum_velocity = 50000
         maximum_velocity = 2000000
 
         if abs(area_difference) < 200 or velocity < minimum_velocity:
-            self.last_area           = current_area
+            self.last_window_area    = current_area
             self.last_accordion_time = current_time
 
             return
@@ -311,7 +297,7 @@ class WindowEffectManager:
                 self.is_accordion_active = True
 
         if not self.is_accordion_active:
-            self.last_area           = current_area
+            self.last_window_area    = current_area
             self.last_accordion_time = current_time
 
             return
@@ -329,7 +315,7 @@ class WindowEffectManager:
             volume = volume
         )
 
-        self.last_area           = current_area
+        self.last_window_area    = current_area
         self.last_accordion_time = current_time
 
     def reset_accordion_state(self) -> None:
@@ -360,29 +346,29 @@ class WindowEffectManager:
         return content.lower().endswith(".png")
 
     @staticmethod
-    def choose_startup_egg() -> dict[str, object] | None:
-        if random.random() <= WindowEffectManager.CHANCE:
-            available_eggs = []
+    def choose_startup_easter_egg() -> dict[str, object] | None:
+        if random.random() > WindowEffectManager.CHANCE:
+            return None
 
-            for egg in WindowEffectManager.STARTUP_DATA:
-                setting_key = f"_{egg['name']}_seen"
+        available_easter_eggs = []
 
-                if not Constants.current_settings.get(setting_key, False):
-                    available_eggs.append(egg)
+        for easter_egg in WindowEffectManager.STARTUP_EASTER_EGGS:
+            setting_key = f"_{easter_egg['name']}_seen"
 
-            if not available_eggs:
-                return None
+            if not Constants.current_settings.get(setting_key, False):
+                available_easter_eggs.append(easter_egg)
 
-            chosen_egg  = random.choice(available_eggs)
-            setting_key = f"_{chosen_egg['name']}_seen"
+        if not available_easter_eggs:
+            return None
 
-            Constants.current_settings.set_value(setting_key, True)
+        chosen_easter_egg = random.choice(available_easter_eggs)
+        setting_key       = f"_{chosen_easter_egg['name']}_seen"
 
-            return chosen_egg
+        Constants.current_settings.set_value(setting_key, True)
 
-        return None
+        return chosen_easter_egg
 
-# UI Components
+# Startup Overlay
 
 class StartupFadeOverlay(QWidget):
     finished = pyqtSignal()
@@ -392,16 +378,16 @@ class StartupFadeOverlay(QWidget):
 
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        self.background_opacity = 1.0
-        self.current_pixmap     = None
+        self.background_opacity        = 1.0
+        self.current_pixmap            = None
 
-        self.main_text      = None
-        self.main_text_rect = None
-        self.font           = None
+        self.main_text                 = None
+        self.main_text_rectangle       = None
+        self.main_font                 = None
 
-        self.egg_text      = None
-        self.egg_text_rect = None
-        self.egg_font      = None
+        self.easter_egg_text           = None
+        self.easter_egg_text_rectangle = None
+        self.easter_egg_font           = None
 
         self.background_fade_animation = QPropertyAnimation(
             self,
@@ -434,15 +420,15 @@ class StartupFadeOverlay(QWidget):
         self.setGeometry(parent_widget.rect())
         self.show()
 
-        is_new_user = Constants.current_settings.get("_new_user", True)
-        hold_time   = default_hold_ms
+        is_new_user  = Constants.current_settings.get("_new_user", True)
+        hold_time_ms = default_hold_ms
 
-        self.font     = Utils.NType(30)
-        self.egg_font = Utils.NType(9)
+        self.main_font       = Utils.NType(30)
+        self.easter_egg_font = Utils.NType(9)
 
         if is_new_user:
-            self.main_text      = "Get ready."
-            self.main_text_rect = self.rect()
+            self.main_text           = "Get ready."
+            self.main_text_rectangle = self.rect()
 
             Constants.current_settings.set_value("_new_user", False)
 
@@ -454,17 +440,17 @@ class StartupFadeOverlay(QWidget):
             )
 
             QTimer.singleShot(
-                hold_time,
+                hold_time_ms,
                 self.background_fade_animation.start
             )
 
             return
 
-        startup_egg = WindowEffectManager.choose_startup_egg()
+        startup_easter_egg = WindowEffectManager.choose_startup_easter_egg()
 
-        if startup_egg is None:
-            self.main_text      = "Cassette"
-            self.main_text_rect = self.rect()
+        if startup_easter_egg is None:
+            self.main_text           = "Cassette"
+            self.main_text_rectangle = self.rect()
 
             Player.ui_player.play_sound(
                 "App/Start",
@@ -473,20 +459,20 @@ class StartupFadeOverlay(QWidget):
             )
 
             QTimer.singleShot(
-                hold_time,
+                hold_time_ms,
                 self.background_fade_animation.start
             )
 
             return
 
-        content   = startup_egg["content"]
-        hold_time = startup_egg.get("duration", default_hold_ms)
+        content      = startup_easter_egg["content"]
+        hold_time_ms = int(startup_easter_egg.get("duration", default_hold_ms))
 
-        if WindowEffectManager.is_image(content):
+        if WindowEffectManager.is_image(str(content)):
             self.main_text = None
-            pixmap         = QPixmap(content)
+            pixmap         = QPixmap(str(content))
 
-            if startup_egg.get("scale", True):
+            if startup_easter_egg.get("scale", True):
                 self.current_pixmap = pixmap.scaled(
                     self.size(),
                     Qt.AspectRatioMode.KeepAspectRatio,
@@ -497,51 +483,46 @@ class StartupFadeOverlay(QWidget):
                 self.current_pixmap = pixmap
 
         else:
-            self.main_text      = "Cassette"
-            self.main_text_rect = self.rect()
-            self.egg_text       = content
+            self.main_text               = "Cassette"
+            self.main_text_rectangle     = self.rect()
+            self.easter_egg_text         = str(content)
 
-            metrics     = QFontMetrics(self.egg_font)
-            rectangle   = metrics.boundingRect(self.egg_text)
+            metrics     = QFontMetrics(self.easter_egg_font)
+            rectangle   = metrics.boundingRect(self.easter_egg_text)
             text_width  = rectangle.width() + 20
             text_height = rectangle.height() + 20
-            margin      = 80
+            margin_px   = 80
 
-            random_x_position = random.randint(
-                margin,
-                max(margin, self.width() - text_width - margin)
+            random_horizontal_position = random.randint(
+                margin_px,
+                max(margin_px, self.width() - text_width - margin_px)
             )
 
-            random_y_position = random.randint(
-                margin,
-                max(margin, self.height() - text_height - margin)
+            random_vertical_position = random.randint(
+                margin_px,
+                max(margin_px, self.height() - text_height - margin_px)
             )
 
-            self.egg_text_rect = QRect(
-                random_x_position,
-                random_y_position,
+            self.easter_egg_text_rectangle = QRect(
+                random_horizontal_position,
+                random_vertical_position,
                 text_width,
                 text_height
             )
 
-        if "fade" in startup_egg:
-            self.background_fade_animation.setDuration(startup_egg["fade"])
+        if "fade" in startup_easter_egg:
+            self.background_fade_animation.setDuration(int(startup_easter_egg["fade"]))
 
-        if "sound" in startup_egg:
-            Player.ui_player.play_sound(
-                startup_egg["sound"],
-                enable_tone_randomizer = False
-            )
+        sound_name = startup_easter_egg.get("sound", "App/Start")
 
-        else:
-            Player.ui_player.play_sound(
-                "App/Start",
-                setting_key            = "startup_sound",
-                enable_tone_randomizer = False
-            )
+        Player.ui_player.play_sound(
+            sound_name,
+            setting_key            = "startup_sound" if sound_name == "App/Start" else None,
+            enable_tone_randomizer = False
+        )
 
         QTimer.singleShot(
-            hold_time,
+            hold_time_ms,
             self.background_fade_animation.start
         )
 
@@ -551,12 +532,10 @@ class StartupFadeOverlay(QWidget):
         self.close()
         self.finished.emit()
 
-    def paintEvent(self, event: QPaintEvent) -> None:
-        del event
-
+    def paintEvent(self, unused_event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHints(
-            QPainter.RenderHint.Antialiasing |
+            QPainter.RenderHint.Antialiasing     |
             QPainter.RenderHint.SmoothPixmapTransform
         )
 
@@ -575,19 +554,23 @@ class StartupFadeOverlay(QWidget):
 
         painter.setPen(QColor(255, 255, 255))
 
-        if self.main_text and self.main_text_rect:
-            painter.setFont(self.font)
-            painter.drawText(self.main_text_rect, Qt.AlignmentFlag.AlignCenter, self.main_text)
+        if self.main_text and self.main_text_rectangle:
+            painter.setFont(self.main_font)
+            painter.drawText(self.main_text_rectangle, Qt.AlignmentFlag.AlignCenter, self.main_text)
 
-        if self.egg_text and self.egg_text_rect:
-            painter.setFont(self.egg_font)
-            painter.drawText(self.egg_text_rect, Qt.AlignmentFlag.AlignCenter, self.egg_text)
+        if self.easter_egg_text and self.easter_egg_text_rectangle:
+            painter.setFont(self.easter_egg_font)
+            painter.drawText(self.easter_egg_text_rectangle, Qt.AlignmentFlag.AlignCenter, self.easter_egg_text)
+
+# Main Window
 
 class ApplicationWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.effect_manager = WindowEffectManager(self)
+        self.effect_manager       = WindowEffectManager(self)
+        self.is_closing           = False
+        self.is_shutdown_complete = False
 
         self.setWindowTitle("Cassette")
         self.resize(1000, 640)
@@ -602,7 +585,6 @@ class ApplicationWindow(QMainWindow):
             (self.main_menu_widget, 1.0),
             (self.compositor_widget, 0.0)
         ):
-
             effect = QGraphicsOpacityEffect(widget)
             effect.setOpacity(opacity)
             widget.setGraphicsEffect(effect)
@@ -611,7 +593,6 @@ class ApplicationWindow(QMainWindow):
         self.main_menu_widget.edit_requested.connect(self.on_edit_requested)
         self.main_menu_widget.composition_created.connect(self.show_compositor_view)
         self.compositor_widget.back_to_main_menu_requested.connect(self.show_main_menu_view)
-
         self.compositor_widget.loading_finished.connect(self.show_compositor_view_after_transition)
 
         self.stack.setCurrentWidget(self.main_menu_widget)
@@ -619,9 +600,6 @@ class ApplicationWindow(QMainWindow):
 
         self.intro_overlay = StartupFadeOverlay(self)
         self.intro_overlay.finished.connect(self.handle_intro_finished)
-
-        self.is_closing           = False
-        self.is_shutdown_complete = False
 
         self.setup_animations()
         self.setup_screenshot_shortcut()
@@ -660,7 +638,7 @@ class ApplicationWindow(QMainWindow):
             event.size().height()
         )
 
-    # Screenshot Setup
+    # Screenshot Management
 
     def setup_screenshot_shortcut(self) -> None:
         self.screenshot_shortcut = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
@@ -684,13 +662,12 @@ class ApplicationWindow(QMainWindow):
 
         painter = QPainter(pixmap)
         painter.setRenderHints(
-            QPainter.RenderHint.Antialiasing     |
-            QPainter.RenderHint.TextAntialiasing |
+            QPainter.RenderHint.Antialiasing          |
+            QPainter.RenderHint.TextAntialiasing      |
             QPainter.RenderHint.SmoothPixmapTransform
         )
 
         painter.scale(scale_factor, scale_factor)
-
         self.render(painter)
         painter.end()
 
@@ -709,16 +686,16 @@ class ApplicationWindow(QMainWindow):
         else:
             logger.error(f"Failed to save 4K screenshot to: {file_path}")
 
-    # Actions
+    # Updates And Data
 
-    def process_new_songs_data(self, info: str) -> None:
+    def process_new_songs_data(self, information: str) -> None:
         with open("System/Assets/Songs.txt", "w", encoding = "utf-8") as file:
-            file.write(info)
+            file.write(information)
 
-    def show_update_info(self, info: dict) -> None:
-        version     = info.get("tag_name", "unknown")
-        changelog   = info.get("body", "No changelog available.")
-        release_url = info.get("html_url", Constants.GITHUB_LINK)
+    def show_update_info(self, information: dict[str, object]) -> None:
+        version     = str(information.get("tag_name", "unknown"))
+        changelog   = str(information.get("body", "No changelog available."))
+        release_url = str(information.get("html_url", Constants.GITHUB_LINK))
 
         if version == open(Utils.get_resource_path("version")).read():
             return
@@ -738,29 +715,22 @@ class ApplicationWindow(QMainWindow):
 
     # Animations
 
+    @staticmethod
+    def create_fadeout_animation(target_effect: QGraphicsOpacityEffect) -> QPropertyAnimation:
+        animation = QPropertyAnimation(target_effect, b"opacity")
+        animation.setDuration(300)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        return animation
+
     def setup_animations(self) -> None:
         self.entry_move_animation = QPropertyAnimation(None, b"geometry")
         self.entry_fade_animation = QPropertyAnimation(None, b"opacity")
 
-        self.main_menu_fadeout = QPropertyAnimation(
-            self.main_menu_widget.graphicsEffect(),
-            b"opacity"
-        )
-
-        self.compositor_fadeout = QPropertyAnimation(
-            self.compositor_widget.graphicsEffect(),
-            b"opacity"
-        )
-
-        self.main_menu_fadeout.setDuration(300)
-        self.main_menu_fadeout.setStartValue(1.0)
-        self.main_menu_fadeout.setEndValue(0.0)
-        self.main_menu_fadeout.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        self.compositor_fadeout.setDuration(300)
-        self.compositor_fadeout.setStartValue(1.0)
-        self.compositor_fadeout.setEndValue(0.0)
-        self.compositor_fadeout.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.main_menu_fadeout    = self.create_fadeout_animation(self.main_menu_widget.graphicsEffect())
+        self.compositor_fadeout   = self.create_fadeout_animation(self.compositor_widget.graphicsEffect())
 
         self.entry_move_animation.setDuration(1000)
         self.entry_move_animation.setEasingCurve(QEasingCurve.Type.OutElastic)
@@ -769,6 +739,8 @@ class ApplicationWindow(QMainWindow):
         self.entry_fade_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self.compositor_fadeout.finished.connect(self.handle_compositor_fadeout_finished)
+
+    # View Transitions
 
     @pyqtSlot(ProjectSaver.Composition)
     def show_compositor_view(self, composition: ProjectSaver.Composition) -> None:
@@ -861,14 +833,25 @@ class ApplicationWindow(QMainWindow):
         self.update_thread.fetch_latest_release()
         self.update_thread.fetch_latest_songs_strings()
 
-    # Lifecycle
+    # Application Lifecycle
 
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()
+
+        if self.is_closing:
+            return
+
+        quit_window   = Windows.QuitWindow()
+        quit_accepted = quit_window.exec()
+
+        if not quit_accepted:
+            return
+
         self.begin_shutdown()
 
     def close(self) -> None:
-        self.begin_shutdown()
+        close_event = QCloseEvent()
+        self.closeEvent(close_event)
 
     def play_exit_effects(self) -> bool:
         Player.ui_player.play_sound("App/Close", setting_key = "shutdown_sound")
@@ -970,9 +953,9 @@ class ApplicationWindow(QMainWindow):
             logger.debug("Exiting application. Bye.")
             application.quit()
 
-        os._exit(0)
+        sys.exit(0)
 
-# Main Execution
+# Application Entry
 
 def main() -> None:
     logger.debug("Configuring OpenGL surface format")
@@ -1001,7 +984,7 @@ def main() -> None:
     application.setStyle("Fusion")
 
     font_paths = [
-        "System/Assets/Fonts/NDot57.otf",   
+        "System/Assets/Fonts/NDot57.otf",
         "System/Assets/Fonts/NType82.otf"
     ]
 

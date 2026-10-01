@@ -3,7 +3,11 @@ import webbrowser
 
 from PyQt6.QtWidgets import QWidget
 
-from System.Common    import Constants
+from System.Common    import (
+    Styles,
+    Constants
+)
+
 from System.Interface import Widgets
 
 from System.Interface.Windows import FloatingWindowGPU
@@ -29,7 +33,7 @@ class UpdateWindow(FloatingWindowGPU):
 
         self.update_label = Widgets.DescriptionLabel("`A new update on GitHub.`\n" + changelog, 700)
 
-        scroll_area = Widgets.ElasticScrollArea(self)
+        scroll_area = Widgets.ElasticScrollArea(self, Styles.Colors.Floating.Background)
         scroll_area.setFixedSize(700, 400)
         scroll_area.add_widget(self.update_label)
 

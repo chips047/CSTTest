@@ -117,11 +117,38 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
         self.margin_x                        = self.target_margin
         self.margin_y                        = self.target_margin
 
+        self.rect_color                      = [0.17, 0.17, 0.17, 1.0]
+        self.border_color                    = [0.25, 0.25, 0.25, 1.0]
+
         self.prepare_format()
         self.apply_attributes(dialog, stays_on_top)
         self.setup_layout(title)
         self.setup_animation_properties()
         self.setup_timers()
+
+    # Color Setup
+
+    def set_rect_color(
+            self,
+            red:   float,
+            green: float,
+            blue:  float,
+            alpha: float = 1.0
+        ) -> None:
+
+        self.rect_color = [red, green, blue, alpha]
+        self.update()
+
+    def set_border_color(
+            self,
+            red:   float,
+            green: float,
+            blue:  float,
+            alpha: float = 1.0
+        ) -> None:
+
+        self.border_color = [red, green, blue, alpha]
+        self.update()
 
     # Setup
 
@@ -169,7 +196,6 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
         self.content_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.content_widget.setMinimumWidth(320)
         
-        # Заставляем виджет контента НЕ расти выше, чем нужно его элементам:
         from PyQt6.QtWidgets import QSizePolicy
         self.content_widget.setSizePolicy(
             QSizePolicy.Policy.Preferred,
@@ -179,10 +205,8 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(16, 16, 16, 16)
         self.content_layout.setSpacing(12)
-        # Ограничиваем layout минимально необходимым размером
         self.content_layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetMinimumSize)
 
-        # ВАЖНО: AlignmentFlag.AlignCenter запрещает main_layout растягивать content_widget по высоте!
         main_layout.addWidget(self.content_widget, 0, Qt.AlignmentFlag.AlignCenter)
 
         if title:
@@ -469,6 +493,43 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
 
         self.shake_timer.start()
 
+    def set_shake_frequency(self, frequency_ms: int) -> None:
+        self.shake_frequency_ms = frequency_ms
+
+        if not self.shake_timer:
+            return
+
+        self.shake_timer.setInterval(self.shake_frequency_ms)
+
+    def set_shake_deviation(self, deviation: float) -> None:
+        self.shake_deviation = deviation
+
+    def configure_shake(
+            self,
+            frequency_ms: int,
+            deviation:    float
+        ) -> None:
+
+        self.set_shake_frequency(frequency_ms)
+        self.set_shake_deviation(deviation)
+
+    def is_shaking(self) -> bool:
+        if not self.shake_timer:
+            return False
+
+        return self.shake_timer.isActive()
+
+    def shake_for(self, duration_ms: int) -> None:
+        if not self.animations_active:
+            return
+
+        self.start_shake()
+        QTimer.singleShot(duration_ms, self.stop_shake)
+
+    def reset_shake_parameters(self) -> None:
+        self.set_shake_frequency(80)
+        self.set_shake_deviation(2.0)
+
     def stop_shake(self) -> None:
         if not self.animations_active:
             return
@@ -642,8 +703,8 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
         GL.glUniform2f(self.location_size, content_width, content_height)
         GL.glUniform1f(self.location_radius, 16.0)
         GL.glUniform1f(self.location_border_px, 2.0)
-        GL.glUniform4f(self.location_rect_color, 0.17, 0.17, 0.17, 1.0)
-        GL.glUniform4f(self.location_border_color, 0.25, 0.25, 0.25, 1.0)
+        GL.glUniform4f(self.location_rect_color, *self.rect_color)
+        GL.glUniform4f(self.location_border_color, *self.border_color)
         GL.glUniform1f(self.location_rect_alpha, background_alpha)
         GL.glUniform1f(self.location_border_alpha, background_alpha)
         GL.glUniform1f(self.location_global_alpha, 1.0)
@@ -790,7 +851,6 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
 
     def showEvent(self, event: QShowEvent) -> None:
         if not self.is_ready:
-            # Сначала рассчитываем идеальный размер и позицию, и только затем показываем окно
             self.adjustSize()
 
             if self.animations_active:
@@ -834,7 +894,10 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
             return
 
         if sys.platform == "linux":
-            self.windowHandle().startSystemMove()
+            handle = self.windowHandle()
+
+            if handle is not None:
+                handle.startSystemMove()
 
         self.drag_position = event.globalPosition().toPoint() - self.pos()
 
@@ -883,9 +946,9 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
 
     def chaos_mode(self) -> None:
         for widget in self.content_widget.findChildren(QWidget):
-            delta_x    = random.randint(-10, 10)
-            delta_y    = random.randint(-10, 10)
-            delta_size = random.randint(-10, 10)
+            delta_x    = random.randint(-12, 12)
+            delta_y    = random.randint(-12, 12)
+            delta_size = random.randint(-8, 8)
 
             widget.move(widget.x() + delta_x, widget.y() + delta_y)
             widget.resize(widget.width() + delta_size, widget.height() + delta_size)
@@ -992,49 +1055,35 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
             pulse_peak_speed: float = 1.2
         ) -> None:
 
-        if self.is_pulsing:
+        if not self.player or not self.player.is_actively_playing:
             return
 
-        self.is_pulsing           = True
-        self.pulse_original_speed = self.player.speed
-        duration_half             = int(duration / 2)
-
-        self.player.set_speed(pulse_peak_speed, duration_half)
-
-        QTimer.singleShot(
-            duration_half,
-            lambda: self.player.set_speed(
-                self.pulse_original_speed,
-                duration_half,
-                on_finish = self.finish_pulse
-            )
+        self.player.pulse_speed(
+            pulse_peak_speed = pulse_peak_speed,
+            duration_ms      = duration
         )
-
-    def finish_pulse(self) -> None:
-        self.is_pulsing = False
 
     def play_stage_sound(self, stage: str) -> None:
         pulse_speed_by_stage = {
-            "open":    None,
+            "open":    1.2,
             "close":   0.5,
             "disturb": 2.0
         }
 
-        pulse_speed = pulse_speed_by_stage[stage]
+        pulse_speed = pulse_speed_by_stage.get(stage, 1.2)
 
-        if self.enable_transition_audio_effects and self.player and self.player.is_playing:
-            if pulse_speed is None:
-                self.player_pulse()
-
-            else:
-                self.player_pulse(400, pulse_speed)
-
+        if self.enable_transition_audio_effects and self.player and self.player.is_actively_playing:
+            duration = 400 if stage in ("close", "disturb") else 300
+            self.player_pulse(duration, pulse_speed)
             return
 
         play_sound_choice(
             source      = self.current_style().sound_for(stage),
             setting_key = "floating_window_sounds"
         )
+
+    def finish_pulse(self) -> None:
+        self.is_pulsing = False
 
     def squish(
             self,
@@ -1082,12 +1131,30 @@ class FloatingWindowGPU(Lifecycle.LoomAnimationMixin, QOpenGLWidget):
         return final_scale
 
     def really_close(self) -> None:
+        self.makeCurrent()
+        
+        try:
+            if hasattr(self, 'vao') and self.vao:
+                GL.glDeleteVertexArrays(1, [self.vao])
+            
+            if hasattr(self, 'vbo') and self.vbo:
+                GL.glDeleteBuffers(1, [self.vbo])
+            
+            if hasattr(self, 'ebo') and self.ebo:
+                GL.glDeleteBuffers(1, [self.ebo])
+        
+        except Exception:
+            pass
+        
+        self.doneCurrent()
+
         if self.animations_active:
             LoomEngine.ui_engine.updated.disconnect(self.update_tilt_smoothing)
             LoomEngine.ui_engine.updated.disconnect(self.update)
 
-            self.shake_timer.stop()
-            self.shake_timer = None
+            if self.shake_timer:
+                self.shake_timer.stop()
+                self.shake_timer = None
 
             self.animations_active = False
 

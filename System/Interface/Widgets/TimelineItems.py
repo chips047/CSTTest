@@ -599,6 +599,8 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         self.fade_is_dragging       = False
         self.fade_dragged_index     = None
 
+    # Setup
+
     def setup_animations(self) -> None:
         self.animation_margin_px       = 0.0
         self.is_animating              = False
@@ -609,6 +611,8 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
 
         self.despawn_duration_ms = None
         self.despawn_start_ms    = None
+
+        self.resize_margin_px = int(Constants.current_settings.get("glyph_resize_handle_width", 10))
 
         self.scale_handle = LoomEngine.ui_engine.bind(
             owner      = self,
@@ -1278,12 +1282,12 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
         x_coordinate_px = event.pos().x()
         visual_width_px = self.visual_width_px
-        margin_px       = self.resize_margin_px
+        margin_px       = int(Constants.current_settings.get("glyph_resize_handle_width", 10))
 
         if -margin_px < x_coordinate_px < margin_px or visual_width_px - margin_px < x_coordinate_px < visual_width_px + margin_px:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
 
-        elif 0 <= x_coordinate_px <= visual_width_px:
+        elif 0.0 <= x_coordinate_px <= visual_width_px:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
 
         else:
@@ -1535,11 +1539,12 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
 
     def determine_interaction_mode(self, x_position_px: float) -> None:
         visual_width_px = self.visual_width_px
+        margin_px       = int(Constants.current_settings.get("glyph_resize_handle_width", 10))
 
-        if x_position_px < self.resize_margin_px:
+        if x_position_px < margin_px:
             self.interaction_mode = "resize_left"
 
-        elif x_position_px > visual_width_px - self.resize_margin_px:
+        elif x_position_px > visual_width_px - margin_px:
             self.interaction_mode = "resize_right"
 
         else:
@@ -1556,7 +1561,7 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
                     for time_fraction, brightness_value in item.pending_fade_keyframes
                 ]
 
-        width_px        = self.visual_width_px - self.keyframe_line_padding * 2
+        width_px        = max(1.0, self.visual_width_px - self.keyframe_line_padding * 2)
         height_px       = Styles.Metrics.Tracks.BoxHeight
         position        = event.pos()
         click_radius_px = 14.0
@@ -1702,7 +1707,7 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         if not self.fade_is_dragging or self.fade_dragged_index is None:
             return
 
-        width_px        = self.visual_width_px - 2 * self.keyframe_line_padding
+        width_px        = max(1.0, self.visual_width_px - self.keyframe_line_padding * 2)
         height_px       = Styles.Metrics.Tracks.BoxHeight
         inner_height_px = height_px - 2 * self.border_width_px
         index           = self.fade_dragged_index

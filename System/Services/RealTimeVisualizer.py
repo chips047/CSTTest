@@ -178,6 +178,9 @@ class GlyphSyncer(QObject):
         self.send_wireless_discovery_probe()
         self.check_wireless_discovery_responses()
 
+        if self.client_socket is not None or self.is_connecting:
+            return
+
         self.run_command_async(
             arguments   = ["devices"],
             on_finished = self.on_devices_listed
@@ -211,7 +214,7 @@ class GlyphSyncer(QObject):
                 if response_dictionary.get("service") != "cassette_receiver":
                     continue
 
-                if self.client_socket is not None:
+                if self.client_socket is not None or self.is_connecting:
                     continue
 
                 logger.info(f"Discovered Receiver via Wi-Fi at {sender_ip_address}")
@@ -233,6 +236,12 @@ class GlyphSyncer(QObject):
         new_list: list[str] = [line.split()[0] for line in lines[1:] if "device" in line]
 
         if self.devices == new_list:
+            if self.client_socket is None and not self.is_connecting:
+                for device in self.devices:
+                    if device not in self.blocked_devices:
+                        self.initialize_adb_device(device)
+                        break
+
             return
 
         old_devices:  list[str] = self.devices
@@ -250,18 +259,22 @@ class GlyphSyncer(QObject):
 
         self.device_changed.emit(new_list)
 
+        if self.client_socket is not None or self.is_connecting:
+            return
+
         for device in connected:
             if device in self.blocked_devices:
                 continue
 
-            if self.client_socket is not None:
-                continue
-
             self.initialize_adb_device(device)
+            break
 
     # Device Initialization Section
 
     def initialize_adb_device(self, device_identifier: str) -> None:
+        if self.client_socket is not None or self.is_connecting:
+            return
+
         def check_package(
                 sub_process:     QProcess,
                 standard_output: str,
@@ -278,14 +291,22 @@ class GlyphSyncer(QObject):
 
             command_sequence: list = [
                 (["-s", device_identifier, "forward", f"tcp:{RECEIVER_TCP_PORT}", f"tcp:{RECEIVER_TCP_PORT}"], None),
-                (["-s", device_identifier, "shell", "settings", "put", "global", "nt_glyph_interface_debug_enable", "1"], None),
                 (["-s", device_identifier, "shell", "dumpsys", "deviceidle", "whitelist", "+com.glyph.receiver"], None),
-                (["-s", device_identifier, "shell", "am", "start-foreground-service", "-n", "com.glyph.receiver/.MainService"], None),
+                (["-s", device_identifier, "shell", "am", "start", "-n", "com.glyph.receiver/.MainActivity"], None),
             ]
+
+            def on_cable_setup_completed() -> None:
+                if self.client_socket is not None or self.is_connecting:
+                    return
+
+                QTimer.singleShot(
+                    800,
+                    lambda: self.connect_asynchronous("127.0.0.1", RECEIVER_TCP_PORT, "cable")
+                )
 
             self.run_sequence(
                 command_list = command_sequence,
-                on_done      = lambda: self.connect_asynchronous("127.0.0.1", RECEIVER_TCP_PORT, "cable")
+                on_done      = on_cable_setup_completed
             )
 
         self.run_command_async(
@@ -354,7 +375,7 @@ class GlyphSyncer(QObject):
                 except Exception:
                     pass
 
-                created_socket.settimeout(2.0)
+                created_socket.settimeout(3.0)
                 created_socket.connect((host_address, port_number))
                 created_socket.settimeout(None)
 
@@ -386,6 +407,15 @@ class GlyphSyncer(QObject):
 
                 if self.composition is not None:
                     self.full_load(self.composition.all_glyphs())
+
+                    current_speed = Player.player.speed
+
+                    if current_speed != 1.0:
+                        self.set_speed(current_speed)
+
+                    if Player.player.is_playing:
+                        current_position_ms = max(0, int(Player.player.get_position()))
+                        self.play(current_position_ms)
 
             except Exception as exception:
                 self.is_connecting = False
@@ -421,8 +451,6 @@ class GlyphSyncer(QObject):
             if send_timestamp > 0.0:
                 latency_ms = (time.time() - send_timestamp) * 1000.0
 
-                print('PING!!!!', latency_ms)
-
                 if latency_ms > 120.0 and not self.has_warned_high_ping:
                     self.has_warned_high_ping = True
                     self.high_ping_detected.emit(latency_ms)
@@ -450,7 +478,7 @@ class GlyphSyncer(QObject):
                 break
 
     def socket_monitor_thread(self, target_socket: socket.socket) -> None:
-        target_socket.settimeout(4.0)
+        target_socket.settimeout(10.0)
         accumulated_chunks = ""
 
         while True:
@@ -698,7 +726,7 @@ class GlyphSyncer(QObject):
         self.send_payload({"action": "stop"})
 
     def set_speed(self, speed_factor: float) -> None:
-        self.send_payload({"action": "set_speed", "value": speed_factor})
+        self.send_payload({"action": "set_speed", "value": round(float(speed_factor), 3)})
 
     def pulse_track(self, track_identifier: str) -> None:
         self.send_payload({"action": "pulse", "track": track_identifier})

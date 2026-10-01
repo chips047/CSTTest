@@ -5,6 +5,7 @@ from collections.abc import Callable
 from PyQt6.QtCore    import QPoint
 from PyQt6.QtWidgets import QWidget
 
+from System.Common    import Styles
 from System.Services  import Player
 from System.Interface import Widgets
 
@@ -19,7 +20,7 @@ class Playground(FloatingWindowGPU):
         self.content_widget.setMinimumWidth(720)
         self.content_widget.setMinimumHeight(480)
 
-        self.scroll_area = Widgets.ElasticScrollArea(self)
+        self.scroll_area = Widgets.ElasticScrollArea(self, Styles.Colors.Floating.Background)
         self.content_layout.addWidget(self.scroll_area)
 
         self.setup_controls()

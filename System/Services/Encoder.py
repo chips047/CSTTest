@@ -59,7 +59,11 @@ def convert_to_glyphs(
     if "\t" in file:
         return labels_to_glyphs(file, start_ms, end_ms)
 
-    file = json.loads(file)
+    try:
+        file = json.loads(file)
+    
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise UnknownFileFormatError(f"File is neither a valid Labels file nor a JSON.")
 
     if is_bngc_file(file):
         return bngc_to_glyphs(file, start_ms, end_ms)
@@ -99,6 +103,7 @@ def get_ogg_metadata(path: str) -> dict:
 
     try:
         data = json.loads(result.stdout)
+    
     except Exception:
         return {}
 

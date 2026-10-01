@@ -35,11 +35,12 @@ from System.Accelerated import PlayerFunctions
 
 Utils.check_dynamic_library(PlayerFunctions)
 
+# Thread Diagnostics
+
 def thread_excepthook(arguments: object) -> None:
     logger.exception(
         "Unhandled exception in thread {}",
         arguments.thread.name,
-
         exc_info = (
             arguments.exc_type,
             arguments.exc_value,
@@ -48,6 +49,8 @@ def thread_excepthook(arguments: object) -> None:
     )
 
 threading.excepthook = thread_excepthook
+
+# Audio Playback
 
 class PlaybackManager(QObject):
     playback_state_changed = pyqtSignal(bool)
@@ -61,59 +64,78 @@ class PlaybackManager(QObject):
             *arguments: object,
             **keywords: object
         ) -> None:
-
         super().__init__(*arguments, **keywords)
 
-        self.lock                     = threading.RLock()
-        self.stream                   = None
-        self.mix_generator            = None
-        self.beat_queue               = None
-        self.beat_thread              = None
-        self.onset_detector           = None
-        self.data                     = None
-        self.sample_rate              = 44100
-        self.position                 = 0.0
-        self.duration_ms              = 0.0
-        self.is_playing               = False
-        self.track_peak_level         = 1.0
-        self.current_audio_level      = 0.0
-        self.current_beat_impact      = 0.0
-        self.playback_start_audio_ms  = 0.0
-        self.playback_start_wall_time = 0.0
+        self.lock                           = threading.RLock()
+        self.stream                         = None
+        self.mix_generator                  = None
+        self.beat_queue                     = None
+        self.beat_thread                    = None
+        self.onset_detector                 = None
+        self.data                           = None
+        self.sample_rate                    = 44100
+        self.position                       = 0.0
+        self.duration_ms                    = 0.0
+        self.is_playing                     = False
+        self.track_peak_level               = 1.0
+        self.current_audio_level            = 0.0
+        self.current_beat_impact            = 0.0
+        self.playback_start_audio_ms        = 0.0
+        self.playback_start_wall_time       = 0.0
 
-        self.eq_low_states  = None
-        self.eq_mid_states  = None
-        self.eq_high_states = None
-        self.pass_states    = None
-        self.echo_states    = None
+        self.base_speed                     = 1.0
+        self.is_stopping                    = False
+        self.is_pulsing                     = False
+        self.pulse_timer                    = None
+        self.property_timers                = {}
 
-        self.pass_frequencies = []
-        self.pass_q           = 1.0
-        self.pass_mix         = 0.0
-        self.pass_gain        = 1.0
+        self.defaults                       = []
+        self.eq_low_states                  = None
+        self.eq_mid_states                  = None
+        self.eq_high_states                 = None
+        self.pass_states                    = None
+        self.echo_states                    = None
 
-        self.radio_noise_active    = False
-        self.radio_noise_color     = "brown"
-        self.radio_noise_permanent = False
+        self.pass_frequencies               = []
+        self.pass_q                         = 1.0
+        self.pass_mix                       = 0.0
+        self.pass_gain                      = 1.0
 
-        self.echo_mode  = "constant"
-        self.echo_focus = "all"
+        self.radio_noise_active             = False
+        self.radio_noise_frames_remaining   = 0
+        self.radio_noise_total_frames       = 0
+        self.radio_noise_elapsed_frames     = 0
+        self.radio_noise_color              = "brown"
+        self.radio_noise_randomize_duration = True
+        self.radio_noise_permanent          = False
+        self.radio_noise_min_duration_ms    = 160.0
+        self.radio_noise_max_duration_ms    = 900.0
 
-        self.stream_sample_rate  = 0
-        self.stream_block_size   = 0
-        self.stream_channels     = 0
-        self.stream_needs_reopen = False
-        self.block_size_ms       = 15
+        self.echo_mode                      = "constant"
+        self.echo_focus                     = "all"
+        self.echo_random_delay_spread_ms    = 70.0
+        self.echo_random_feedback_spread    = 0.08
+        self.echo_random_mix_spread         = 0.05
 
-        self.onset_buffer        = numpy.empty(0, dtype = numpy.float32)
-        self.level_decay_ms      = 120.0
-        self.impact_decay_ms     = 180.0
+        self.stream_sample_rate             = 0
+        self.stream_block_size              = 0
+        self.stream_channels                = 0
+        self.stream_needs_reopen            = False
+        self.block_size_ms                  = 15
+
+        self.onset_buffer                   = numpy.empty(0, dtype = numpy.float32)
+        self.level_decay_ms                 = 120.0
+        self.impact_decay_ms                = 180.0
+
+        self.window_size                    = 2048
+        self.hop_size                       = 512
+        self.last_heavy_time                = 0.0
+        self.heavy_cooldown                 = 0.3
+        self.heavy_rms_threshold            = 0.2
 
         self.setup_effect_properties()
         self.reset_playback_state()
         self.setup_beat_detection()
-
-    # Properties
 
     @property
     def speed(self) -> float:
@@ -123,7 +145,9 @@ class PlaybackManager(QObject):
     def volume(self) -> float:
         return self.volume_property.value
 
-    # Setup
+    @property
+    def is_actively_playing(self) -> bool:
+        return self.is_playing and not self.is_stopping and self.speed > 0.05
 
     def setup_effect_properties(self) -> None:
         self.defaults = [
@@ -161,6 +185,15 @@ class PlaybackManager(QObject):
 
             setattr(self, f"{name}_property", property_handle)
 
+    def cancel_property_timer(self, property_name: str) -> None:
+        if property_name not in self.property_timers:
+            return
+
+        old_timer = self.property_timers.pop(property_name)
+        old_timer.stop()
+        old_timer.deleteLater()
+        ui_engine.release()
+
     def set_property(
             self,
             property_name:     str,
@@ -173,6 +206,8 @@ class PlaybackManager(QObject):
 
         property_handle = getattr(self, f"{property_name}_property")
 
+        self.cancel_property_timer(property_name)
+
         if duration_ms <= 0:
             property_handle.set_base(value)
 
@@ -181,6 +216,22 @@ class PlaybackManager(QObject):
 
             return
 
+        ui_engine.acquire()
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def combined_finish() -> None:
+            self.property_timers.pop(property_name, None)
+            timer.deleteLater()
+            ui_engine.release()
+
+            if on_finish:
+                on_finish()
+
+        timer.timeout.connect(combined_finish)
+        self.property_timers[property_name] = timer
+
         property_handle.set_target(
             value,
             duration_ms,
@@ -188,8 +239,7 @@ class PlaybackManager(QObject):
             multiply_duration
         )
 
-        if on_finish:
-            QTimer.singleShot(duration_ms, on_finish)
+        timer.start(duration_ms)
 
     def apply_properties(
             self,
@@ -202,31 +252,46 @@ class PlaybackManager(QObject):
             self.set_property(name, value, duration_ms, easing)
 
     def reset_playback_state(self) -> None:
+        for timer in list(self.property_timers.values()):
+            timer.stop()
+            timer.deleteLater()
+            ui_engine.release()
+
+        self.property_timers.clear()
+
+        if self.pulse_timer is not None:
+            self.pulse_timer.stop()
+            self.pulse_timer.deleteLater()
+            self.pulse_timer = None
+
+        self.base_speed                     = 1.0
+        self.is_stopping                    = False
+        self.is_pulsing                     = False
+
         for item in self.defaults:
             name       = item[0]
             base_value = item[1]
-
             getattr(self, f"{name}_property").set_base(base_value)
 
-        self.pass_frequencies = []
-        self.position         = 0.0
-        self.echo_mode        = "constant"
-        self.echo_focus       = "all"
-        self.is_playing       = False
-        self.duration_ms      = 0.0
+        self.pass_frequencies               = []
+        self.position                       = 0.0
+        self.echo_mode                      = "constant"
+        self.echo_focus                     = "all"
+        self.is_playing                     = False
+        self.duration_ms                    = 0.0
 
-        self.track_peak_level    = 1.0
-        self.current_audio_level = 0.0
-        self.current_beat_impact = 0.0
-        self.level_decay_ms      = 120.0
-        self.impact_decay_ms     = 180.0
-        self.onset_buffer        = numpy.empty(0, dtype = numpy.float32)
+        self.track_peak_level               = 1.0
+        self.current_audio_level            = 0.0
+        self.current_beat_impact            = 0.0
+        self.level_decay_ms                 = 120.0
+        self.impact_decay_ms                = 180.0
+        self.onset_buffer                   = numpy.empty(0, dtype = numpy.float32)
 
-        self.eq_low_states  = None
-        self.eq_mid_states  = None
-        self.eq_high_states = None
-        self.pass_states    = None
-        self.echo_states    = None
+        self.eq_low_states                  = None
+        self.eq_mid_states                  = None
+        self.eq_high_states                 = None
+        self.pass_states                    = None
+        self.echo_states                    = None
 
         self.radio_noise_active             = False
         self.radio_noise_frames_remaining   = 0
@@ -238,9 +303,9 @@ class PlaybackManager(QObject):
         self.radio_noise_min_duration_ms    = 160.0
         self.radio_noise_max_duration_ms    = 900.0
 
-        self.echo_random_delay_spread_ms = 70.0
-        self.echo_random_feedback_spread = 0.08
-        self.echo_random_mix_spread      = 0.05
+        self.echo_random_delay_spread_ms    = 70.0
+        self.echo_random_feedback_spread    = 0.08
+        self.echo_random_mix_spread         = 0.05
 
     def setup_beat_detection(self) -> None:
         self.window_size         = 2048
@@ -270,8 +335,6 @@ class PlaybackManager(QObject):
 
         self.onset_detector.set_threshold(0.345)
 
-    # BeatDetection
-
     def set_analysis_window_size(self, window_size: int) -> None:
         if window_size == self.window_size:
             return
@@ -295,54 +358,78 @@ class PlaybackManager(QObject):
 
             self.beat_normal.emit(raw_root_mean_square)
 
-    # Loading
+    def load_audio(
+            self,
+            path:     str,
+            on_ready: object = None
+        ) -> None:
 
-    def load_audio(self, path: str) -> None:
         data, sample_rate = soundfile.read(path, dtype = "float32")
-        self.load_audio_from_data(data, sample_rate)
+        self.load_audio_from_data(data, sample_rate, on_ready = on_ready)
 
     def load_audio_from_data(
             self,
             data:        numpy.ndarray,
-            sample_rate: int
+            sample_rate: int,
+            on_ready:    object = None
         ) -> None:
 
-        if data.ndim == 1:
-            data = numpy.column_stack((data, data))
+        def apply_load() -> None:
+            stereo_data = numpy.column_stack((data, data)) if data.ndim == 1 else data
+            stereo_data = numpy.ascontiguousarray(stereo_data, dtype = numpy.float32)
+            channels    = stereo_data.shape[1]
 
-        data     = numpy.ascontiguousarray(data, dtype = numpy.float32)
-        channels = data.shape[1]
+            with self.lock:
+                self.reset_playback_state()
 
-        with self.lock:
-            self.reset_playback_state()
+                self.sample_rate      = sample_rate
+                self.data             = stereo_data
+                self.duration_ms      = (len(stereo_data) / sample_rate) * 1000.0
 
-            self.sample_rate = sample_rate
-            self.data        = data
-            self.duration_ms = (len(data) / sample_rate) * 1000.0
+                self.eq_low_states    = numpy.zeros((channels, 4), dtype = numpy.float64)
+                self.eq_mid_states    = numpy.zeros((channels, 4), dtype = numpy.float64)
+                self.eq_high_states   = numpy.zeros((channels, 4), dtype = numpy.float64)
+                self.echo_states      = numpy.zeros((channels, 4), dtype = numpy.float64)
+                self.pass_states      = numpy.zeros((len(self.pass_frequencies), channels, 4), dtype = numpy.float64)
 
-            self.eq_low_states  = numpy.zeros((channels, 4), dtype = numpy.float64)
-            self.eq_mid_states  = numpy.zeros((channels, 4), dtype = numpy.float64)
-            self.eq_high_states = numpy.zeros((channels, 4), dtype = numpy.float64)
-            self.echo_states    = numpy.zeros((channels, 4), dtype = numpy.float64)
-            self.pass_states    = numpy.zeros((len(self.pass_frequencies), channels, 4), dtype = numpy.float64)
+                peak_level            = float(numpy.max(numpy.abs(stereo_data)))
+                self.track_peak_level = max(peak_level, 1e-6)
 
-            peak_level            = float(numpy.max(numpy.abs(data)))
-            self.track_peak_level = max(peak_level, 1e-6)
+            self.stream_needs_reopen = (
+                self.stream is None                         or
+                self.stream_sample_rate != self.sample_rate or
+                self.stream_channels != channels            or
+                self.stream_block_size != self.block_size_ms
+            )
 
-        self.stream_needs_reopen = (
-            self.stream is None                         or
-            self.stream_sample_rate != self.sample_rate or
-            self.stream_channels != channels            or
-            self.stream_block_size != self.block_size_ms
-        )
+            self.audio_loaded.emit(
+                self.data,
+                self.sample_rate,
+                len(self.data) / self.sample_rate
+            )
 
-        self.audio_loaded.emit(
-            self.data,
-            self.sample_rate,
-            len(self.data) / self.sample_rate
-        )
+            self.ensure_stream_opened()
 
-        self.ensure_stream_opened()
+            if on_ready:
+                on_ready()
+
+        if self.is_playing and self.data is not None and self.speed > 0.001:
+            remaining_ms = max(0.0, self.duration_ms - self.get_position())
+            fade_ms      = min(120, max(10, int(remaining_ms))) if remaining_ms > 0 else 0
+
+            if fade_ms > 0:
+                self.set_speed(
+                    0.0,
+                    duration_ms           = fade_ms,
+                    easing                = Easing.ease_out_quart,
+                    use_engine_multiplier = False,
+                    on_finish             = apply_load
+                )
+                return
+
+            self.stop()
+
+        apply_load()
 
     def open_stream(self) -> None:
         self.close_stream()
@@ -390,8 +477,6 @@ class PlaybackManager(QObject):
             self.mix_generator     = None
             self.stream_block_size = 0
 
-    # Playback
-
     def get_position(self) -> float:
         if not self.is_playing:
             return self.playback_start_audio_ms
@@ -417,6 +502,13 @@ class PlaybackManager(QObject):
         self.play(target_ms)
 
     def stop(self) -> None:
+        if self.pulse_timer is not None:
+            self.pulse_timer.stop()
+            self.pulse_timer.deleteLater()
+            self.pulse_timer = None
+
+        self.is_pulsing = False
+
         with self.lock:
             if not self.is_playing:
                 return
@@ -429,6 +521,7 @@ class PlaybackManager(QObject):
 
             self.playback_start_wall_time = time.time()
             self.is_playing               = False
+            self.is_stopping              = False
 
         self.playback_state_changed.emit(False)
 
@@ -478,8 +571,6 @@ class PlaybackManager(QObject):
         self.playback_state_changed.emit(True)
         self.playback_start_audio_ms  = target_position_ms
         self.playback_start_wall_time = time.time()
-
-    # Processing
 
     def compute_eq_coefficients(self) -> tuple[
             tuple[float, float, float, float, float, float],
@@ -546,9 +637,9 @@ class PlaybackManager(QObject):
             context: dict[str, object]
         ) -> numpy.ndarray:
 
-        low        = context["eq_low"]
-        mid        = context["eq_mid"]
-        high       = context["eq_high"]
+        low        = float(context["eq_low"])
+        mid        = float(context["eq_mid"])
+        high       = float(context["eq_high"])
         is_neutral = abs(low - 1.0) < 0.01 and abs(mid - 1.0) < 0.01 and abs(high - 1.0) < 0.01
 
         if is_neutral:
@@ -576,8 +667,8 @@ class PlaybackManager(QObject):
             context: dict[str, object]
         ) -> numpy.ndarray:
 
-        reverb_mix = context["reverb_mix"]
-        noise_mix  = context["noise_mix"]
+        reverb_mix = float(context["reverb_mix"])
+        noise_mix  = float(context["noise_mix"])
 
         if reverb_mix <= 0.0 and noise_mix <= 0.0:
             return block
@@ -618,34 +709,38 @@ class PlaybackManager(QObject):
             len(block)
         )
 
-        return PlayerFunctions.apply_reverb_block(block, tap_one, tap_two, context["reverb_mix"])
+        return PlayerFunctions.apply_reverb_block(block, tap_one, tap_two, float(context["reverb_mix"]))
 
-    def apply_passes(
-            self,
-            block:   numpy.ndarray,
-            context: dict[str, object]
-        ) -> numpy.ndarray:
+    def apply_passes(self, block: numpy.ndarray, context: dict[str, object]) -> numpy.ndarray:
+        pass_mix = float(context["pass_mix"])
 
-        pass_mix = context["pass_mix"]
-
-        if pass_mix <= 0.0 or len(self.pass_frequencies) <= 0:
+        if pass_mix <= 0.0:
             return block
 
-        self.ensure_pass_states(block.shape[1])
+        with self.lock:
+            if len(self.pass_frequencies) <= 0:
+                return block
+            
+            self.ensure_pass_states(block.shape[1])
 
-        if self.pass_states is None or self.pass_states.shape[0] <= 0:
+            frequencies = list(self.pass_frequencies)
+            states      = self.pass_states
+
+        pass_q = max(0.1, float(context["pass_q"]))
+        
+        coefficients = numpy.array([
+            PlayerFunctions.calculate_bandpass_coefficients(
+                float(freq),
+                pass_q,
+                float(self.sample_rate)
+            )
+            for freq in frequencies
+        ], dtype = numpy.float64)
+
+        if states.shape[0] != len(coefficients):
             return block
 
-        pass_q       = max(0.1, float(context["pass_q"]))
-        coefficients = numpy.array(
-            [
-                PlayerFunctions.calculate_bandpass_coefficients(float(frequency), pass_q, float(self.sample_rate))
-                for frequency in self.pass_frequencies
-            ],
-            dtype = numpy.float64
-        )
-
-        filtered = PlayerFunctions.apply_bandpass_stack(block, coefficients, self.pass_states)
+        filtered = PlayerFunctions.apply_bandpass_stack(block, coefficients, states)
         filtered = filtered * float(context["pass_gain"])
         filtered = numpy.clip(filtered, -1.0, 1.0)
 
@@ -679,14 +774,14 @@ class PlaybackManager(QObject):
             context: dict[str, object]
         ) -> numpy.ndarray:
 
-        echo_mix = context["echo_mix"]
+        echo_mix = float(context["echo_mix"])
 
         if echo_mix <= 0.0:
             return block
 
         delay_ms = float(context["echo_delay_ms"])
         feedback = float(context["echo_feedback"])
-        mix      = float(echo_mix)
+        mix      = echo_mix
 
         if self.echo_mode == "random":
             delay_ms += random.uniform(-self.echo_random_delay_spread_ms, self.echo_random_delay_spread_ms)
@@ -870,7 +965,7 @@ class PlaybackManager(QObject):
     def process_audio_chunk(self, frames: int) -> numpy.ndarray:
         context = self.build_processing_context()
 
-        self.check_start_radio_noise(context["radio_noise_intensity"])
+        self.check_start_radio_noise(float(context["radio_noise_intensity"]))
 
         block = self.generate_audio_block(frames, context)
 
@@ -883,7 +978,7 @@ class PlaybackManager(QObject):
         block = self.apply_bitcrush(block, context)
         block = self.apply_radio_noise_effect(block, context)
 
-        block *= context["volume"]
+        block *= float(context["volume"])
 
         chunk_duration_ms        = (frames / self.sample_rate) * 1000.0
         impact_decay_factor      = math.exp(-chunk_duration_ms / self.impact_decay_ms)
@@ -945,7 +1040,7 @@ class PlaybackManager(QObject):
             frames
         )
 
-        self.position += frames * context["speed"]
+        self.position += frames * float(context["speed"])
 
         return block
 
@@ -979,8 +1074,6 @@ class PlaybackManager(QObject):
     def get_current_beat_impact(self) -> float:
         return self.current_beat_impact
 
-    # Effects
-
     def set_channel_delay(
             self,
             left_to_ms:  float | None = None,
@@ -988,7 +1081,6 @@ class PlaybackManager(QObject):
             duration_ms: int          = 0,
             easing:      Easing       = Easing.smooth
         ) -> None:
-
         if left_to_ms is None and right_to_ms is None:
             return
 
@@ -1025,14 +1117,39 @@ class PlaybackManager(QObject):
             on_finish:             object = None,
             use_engine_multiplier: bool   = True,
             cleanup_on_finish:     bool   = False,
-            shutdown_on_finish:    bool   = False
+            shutdown_on_finish:    bool   = False,
+            update_base:           bool   = True
         ) -> None:
 
-        self.update_playback_start(new_speed)
+        is_slowdown = new_speed < self.speed
+
+        if is_slowdown and self.is_playing and self.duration_ms > 0:
+            remaining_ms = max(0.0, self.duration_ms - self.get_position())
+
+            if remaining_ms <= 10.0:
+                duration_ms = 0
+
+            elif duration_ms > remaining_ms:
+                duration_ms = max(10, int(remaining_ms))
+
+        is_stopping_to_zero = (new_speed == 0.0)
+
+        if is_stopping_to_zero:
+            self.is_stopping = True
+
+        elif update_base and not self.is_stopping and not self.is_pulsing and new_speed > 0.0:
+            self.base_speed = new_speed
+
+        self.update_playback_start(self.speed)
 
         internal_callback = self.get_speed_callback(cleanup_on_finish, shutdown_on_finish)
 
         def combined_callback() -> None:
+            if is_stopping_to_zero:
+                self.stop()
+                self.is_stopping = False
+                self.speed_property.set_base(self.base_speed)
+
             if internal_callback:
                 internal_callback()
 
@@ -1046,6 +1163,90 @@ class PlaybackManager(QObject):
             easing,
             combined_callback,
             use_engine_multiplier
+        )
+
+    def fade_out_and_stop(
+            self,
+            duration_ms: int           = 1000,
+            easing:      Easing        = Easing.ease_out_quart,
+            on_finish:   object | None = None
+        ) -> None:
+
+        if not self.is_playing:
+            self.stop()
+
+            if on_finish:
+                on_finish()
+
+            return
+
+        self.set_speed(
+            0.0,
+            duration_ms = duration_ms,
+            easing      = easing,
+            on_finish   = on_finish
+        )
+
+    def pulse_speed(
+            self,
+            pulse_peak_speed: float = 1.2,
+            duration_ms:      int   = 300,
+            easing:           Easing = Easing.ease_out_cubic
+        ) -> None:
+
+        if not self.is_actively_playing:
+            return
+
+        remaining_ms = max(0.0, self.duration_ms - self.get_position())
+
+        if remaining_ms <= 20.0:
+            return
+
+        if duration_ms > remaining_ms:
+            duration_ms = max(20, int(remaining_ms))
+
+        if self.pulse_timer is not None:
+            self.pulse_timer.stop()
+            self.pulse_timer.deleteLater()
+            self.pulse_timer = None
+
+        self.is_pulsing = True
+        target_base     = self.base_speed
+        duration_half   = max(10, duration_ms // 2)
+
+        def return_to_base() -> None:
+            self.pulse_timer = None
+
+            if not self.is_playing or self.is_stopping:
+                self.is_pulsing = False
+                return
+
+            return_remaining = max(0.0, self.duration_ms - self.get_position())
+            return_duration  = min(duration_half, max(10, int(return_remaining))) if return_remaining > 0 else 0
+
+            def on_pulse_completed() -> None:
+                self.is_pulsing = False
+
+            self.set_speed(
+                target_base,
+                duration_ms           = return_duration,
+                easing                = easing,
+                on_finish             = on_pulse_completed,
+                use_engine_multiplier = False,
+                update_base           = False
+            )
+
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.setSingleShot(True)
+        self.pulse_timer.timeout.connect(return_to_base)
+        self.pulse_timer.start(duration_half)
+
+        self.set_speed(
+            pulse_peak_speed,
+            duration_ms           = duration_half,
+            easing                = easing,
+            use_engine_multiplier = False,
+            update_base           = False
         )
 
     def set_volume(
@@ -1086,15 +1287,11 @@ class PlaybackManager(QObject):
             easing:      Easing = Easing.smooth
         ) -> None:
 
-        clamped_low  = max(0.0, low)
-        clamped_mid  = max(0.0, mid)
-        clamped_high = max(0.0, high)
-
         self.apply_properties(
             {
-                "eq_low":  clamped_low,
-                "eq_mid":  clamped_mid,
-                "eq_high": clamped_high
+                "eq_low":  max(0.0, low),
+                "eq_mid":  max(0.0, mid),
+                "eq_high": max(0.0, high)
             },
             duration_ms,
             easing
@@ -1200,6 +1397,7 @@ class PlaybackManager(QObject):
                 easing,
                 on_finish
             )
+
             return
 
         if cleaned_frequencies is not None:
@@ -1280,8 +1478,6 @@ class PlaybackManager(QObject):
             easing
         )
 
-    # Shutdown
-
     def full_shutdown(self) -> None:
         self.reset_playback_state()
 
@@ -1298,6 +1494,8 @@ class PlaybackManager(QObject):
 
             except queue.Full:
                 pass
+
+# Interface Audio
 
 class UISound:
     def __init__(
@@ -1578,6 +1776,8 @@ class UISoundManager:
             pcm          = (master_block * 32767.0).astype(numpy.int16)
             frames       = yield pcm.tobytes()
 
+# Byte Beat Synthesis
+
 def shift_right_unsigned(
         value:  int,
         amount: int
@@ -1592,6 +1792,7 @@ class ByteBeatPlayer:
         self.device            = None
         self.lock              = threading.RLock()
         self.formula_bytecode  = None
+        self.generator         = None
         self.time_index        = 0
         self.volume            = 0.3
         self.time_scale        = 8000 / self.sample_rate
@@ -1620,8 +1821,6 @@ class ByteBeatPlayer:
             "js_shr":       shift_right_unsigned,
             "__builtins__": None
         }
-
-    # Setup
 
     def preprocess_formula(self, formula: str) -> str:
         result = formula
@@ -1660,12 +1859,8 @@ class ByteBeatPlayer:
 
         self.device.start(self.generator)
 
-    # Playback
-
     def play(self) -> None:
         self.ensure_device()
-
-    # Processing
 
     def generate_silence_block(self, number_of_frames: int) -> bytes:
         silence_buffer = numpy.zeros(number_of_frames, dtype = numpy.int16)
@@ -1701,7 +1896,7 @@ class ByteBeatPlayer:
             output_buffer: numpy.ndarray,
             count:         int
         ) -> None:
-
+        
         if count <= 0:
             return
 
@@ -1719,12 +1914,8 @@ class ByteBeatPlayer:
 
             number_of_frames = yield self.process_audio_block(number_of_frames)
 
-    # State
-
     def get_current_intensity(self) -> float:
         return self.current_intensity
-
-    # Shutdown
 
     def cleanup(self) -> None:
         if self.device is not None:
@@ -1733,8 +1924,11 @@ class ByteBeatPlayer:
 
         self.device                 = None
         self.formula_bytecode       = None
+        self.generator              = None
         self.time_index             = 0
         self.execution_context["t"] = 0
+
+# Tempo Animation
 
 class BPMAnimator(QObject):
     beat_1  = pyqtSignal()
@@ -1746,27 +1940,26 @@ class BPMAnimator(QObject):
     def __init__(self) -> None:
         super().__init__()
 
-        self.counter       = 0
-        self.current_bpm   = 120
-        self.current_speed = 1.0
-        self.next_tick_ms  = 0
-
-        self.elapsed = QElapsedTimer()
-        self.timer   = QTimer(self)
-
-        self.timer.setInterval(Constants.POLL_INTERVAL_MS)
-        self.timer.timeout.connect(self.tick)
+        self.counter          = 0
+        self.current_bpm      = 120
+        self.current_speed    = 1.0
+        self.next_tick_ms     = 0
 
         self.last_time        = 0
         self.time_accumulator = 0.0
 
+        self.elapsed          = QElapsedTimer()
+        self.timer            = QTimer(self)
+
+        self.timer.setInterval(Constants.POLL_INTERVAL_MS)
+        self.timer.timeout.connect(self.tick)
         self.elapsed.start()
 
     def beat16_interval(self) -> int:
         bpm   = max(1, self.current_bpm)
         speed = max(0.01, self.current_speed)
 
-        return int(60000 / (bpm * speed * 4))
+        return max(1, int(60000 / (bpm * speed * 4)))
 
     def tick(self) -> None:
         now        = self.elapsed.elapsed()
@@ -1823,6 +2016,8 @@ class BPMAnimator(QObject):
         }
 
         return self.beat16_interval() * multiplier.get(beat, 1)
+
+# System Initialization
 
 player       = PlaybackManager()
 ui_player    = UISoundManager()

@@ -105,6 +105,8 @@ class KeyboardController(QObject):
 
         self.shortcuts.append(shortcut)
 
+    # Setup
+
     def setup_hotkeys(self) -> None:
         base_shortcuts = [
             (Qt.KeyboardModifier.ControlModifier | Qt.Key.Key_Z,                                     self.undo_requested.emit),
@@ -141,8 +143,8 @@ class KeyboardController(QObject):
             (Qt.Key.Key_S,            self.speed_cycle_requested.emit),
             (Qt.Key.Key_B,            self.open_brightness_editor),
             (Qt.Key.Key_D,            self.open_duration_editor),
-            (Qt.Key.Key_BracketLeft,  lambda: self.handle_brightness_adjust(-5)),
-            (Qt.Key.Key_BracketRight, lambda: self.handle_brightness_adjust(5)),
+            (Qt.Key.Key_BracketLeft,  lambda: self.adjust_brightness_by_step(-1)),
+            (Qt.Key.Key_BracketRight, lambda: self.adjust_brightness_by_step(1)),
 
             (Qt.Key.Key_Escape, self.escape_requested.emit),
 
@@ -234,7 +236,7 @@ class KeyboardController(QObject):
         self.space_press_times = [press_time for press_time in self.space_press_times if current_time - press_time <= 1.5]
         self.space_press_times.append(current_time)
 
-        if len(self.space_press_times) >= 5:
+        if len(self.space_press_times) >= 10:
             self.trigger_space_easter_egg()
 
             return
@@ -295,6 +297,10 @@ class KeyboardController(QObject):
         ratio            = view_position_x / viewport_width
 
         return max(-1.0, min(1.0, (ratio - 0.5) * 2.0))
+
+    def adjust_brightness_by_step(self, direction_factor: int) -> None:
+        step_value = int(Constants.current_settings.get("brightness_step", 5))
+        self.handle_brightness_adjust(direction_factor * step_value)
 
     def jump_to_position(
             self,

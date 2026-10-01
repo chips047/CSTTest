@@ -66,12 +66,15 @@ def medfilt_np(data: numpy.ndarray, kernel_size: int) -> numpy.ndarray:
 def get_processes() -> list[str]:
     try:
         return [proc.name() for proc in psutil.process_iter(attrs=['name'])]
-            
+    
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
+        return []
 
-def is_text_in_list(text: str, list: list) -> bool:
-    return any(text in item for item in list)
+def is_text_in_list(text: str, items: list | None) -> bool:
+    if not items:
+        return False
+    
+    return any(text in item for item in items)
 
 def get_process_string() -> str:
     processes = get_processes()

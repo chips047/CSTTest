@@ -179,16 +179,21 @@ def convert_effect_to_ported_glyphs(
     output_glyphs = []
 
     if "segments" in effect:
-        segment_source      = Constants.DEVICES[composition_model].segments_map[effect["track"]]
-        segment_destination = Constants.DEVICES[port_to].segments_map[target_tracks[0]]
+        source_map = Constants.DEVICES[composition_model].segments_map
+        dest_map   = Constants.DEVICES[port_to].segments_map
+
+        segment_source      = source_map.get(effect["track"])
+        segment_destination = dest_map.get(target_tracks[0])
         
-        ported_segments = port_segments_function(segment_source, segment_destination, effect["segments"])
+        if segment_source and segment_destination:
+            ported_segments = port_segments_function(segment_source, segment_destination, effect["segments"])
 
-        effect_for_conversion             = effect.copy()
-        effect_for_conversion["track"]    = target_tracks[0]
-        effect_for_conversion["segments"] = ported_segments
+            effect_for_conversion             = effect.copy()
+            effect_for_conversion["track"]    = target_tracks[0]
+            effect_for_conversion["segments"] = ported_segments
 
-        output_glyphs.extend(GlyphEffects.effect_to_glyph(effect_for_conversion, beats_per_minute, port_to))
+            output_glyphs.extend(GlyphEffects.effect_to_glyph(effect_for_conversion, beats_per_minute, port_to))
+            return output_glyphs
 
     for track_item in target_tracks:
         if isinstance(track_item, tuple):

@@ -8,6 +8,7 @@ from loguru  import logger
 from PyQt6.QtCore import (
     Qt,
     QSize,
+    QEvent,
     QTimer,
     QObject,
     QThread
@@ -15,12 +16,15 @@ from PyQt6.QtCore import (
 
 from PyQt6.QtGui import (
     QIcon,
+    QKeyEvent,
+    QShowEvent,
     QCloseEvent
 )
 
 from PyQt6.QtWidgets import (
-    QPushButton,
-    QHBoxLayout
+    QWidget,
+    QHBoxLayout,
+    QPushButton
 )
 
 from System.Common import (
@@ -39,8 +43,7 @@ from System.Interface import (
 )
 
 from System.Interface.Animation import LoomEngine
-
-from System.Interface.Windows.ErrorWindow       import ErrorWindow
+from System.Interface.Windows.ErrorWindow import ErrorWindow
 from System.Interface.Windows.FloatingWindowGPU import FloatingWindowGPU
 
 from System.Interface.Windows.Helpers import (
@@ -48,7 +51,7 @@ from System.Interface.Windows.Helpers import (
     make_time_textbox
 )
 
-# Pipeline Execution
+# Pipeline Section
 
 class AudioLoadingDialog(FloatingWindowGPU):
     def launch_worker_thread(
@@ -117,18 +120,28 @@ class AudioLoadingDialog(FloatingWindowGPU):
         window.destroyed.connect(self.close)
         window.exec()
 
+    def is_thread_running(self, thread: QThread | None) -> bool:
+        if not thread:
+            return False
+
+        try:
+            return thread.isRunning()
+
+        except RuntimeError:
+            return False
+
     def cleanup_threads(self, threads: list[QThread | None]) -> None:
         threads_to_wait = []
 
         for thread in threads:
+            if not self.is_thread_running(thread):
+                continue
+
             try:
-                if not thread or not thread.isRunning():
-                    continue
-
-                threads_to_wait.append(thread)
                 thread.quit()
+                threads_to_wait.append(thread)
 
-            except Exception:
+            except RuntimeError:
                 pass
 
         if not threads_to_wait:
@@ -139,7 +152,11 @@ class AudioLoadingDialog(FloatingWindowGPU):
 
     def wait_and_cleanup(self, threads: list[QThread]) -> None:
         for thread in threads:
-            thread.wait(500)
+            try:
+                thread.wait(500)
+
+            except RuntimeError:
+                pass
 
         self.safe_delete_cache()
 
@@ -162,7 +179,7 @@ class AudioLoadingDialog(FloatingWindowGPU):
             logger.warning(f"Could not delete cache yet, retrying... {error}")
             QTimer.singleShot(1000, self.safe_delete_cache)
 
-# Audio Editor Layout
+# Audio Editor Section
 
 class AudioEditorBase(AudioLoadingDialog):
     def setup_trim_section(self) -> None:
@@ -181,6 +198,7 @@ class AudioEditorBase(AudioLoadingDialog):
         self.play_button.setIconSize(QSize(36, 36))
         self.play_button.setFixedSize(36, 36)
         self.play_button.setEnabled(False)
+        self.play_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.playback_timer = Timing.Timer(Constants.FPS_60, self.update_playback, parent = self)
 
@@ -223,16 +241,18 @@ class AudioEditorBase(AudioLoadingDialog):
         try:
             data, sample_rate, waveform_data = result
 
-            self.player.load_audio_from_data(data, sample_rate)
-            self.trim_widget.set_data(data, sample_rate, waveform_data)
+            def on_audio_ready_callback() -> None:
+                self.trim_widget.set_data(data, sample_rate, waveform_data)
 
-            self.end_time_textbox.max_number = self.trim_widget.duration_sec
-            self.end_time_textbox.setText(max(1, math.ceil(self.trim_widget.duration_sec)))
+                self.end_time_textbox.max_number = self.trim_widget.duration_sec
+                self.end_time_textbox.setText(max(1, math.ceil(self.trim_widget.duration_sec)))
 
-            self.update_textboxes(self.trim_widget.start_time_sec, self.trim_widget.end_time_sec)
+                self.update_textboxes(self.trim_widget.start_time_sec, self.trim_widget.end_time_sec)
 
-            self.play_button.setEnabled(True)
-            self.on_audio_ready()
+                self.play_button.setEnabled(True)
+                self.on_audio_ready()
+
+            self.player.load_audio_from_data(data, sample_rate, on_ready = on_audio_ready_callback)
 
         except Exception as error:
             self.trim_widget.show_error()
@@ -350,12 +370,49 @@ class AudioEditorBase(AudioLoadingDialog):
     def get_threads(self) -> list[QThread | None]:
         return [self.prepare_thread, self.load_thread]
 
+    def eventFilter(
+            self,
+            watched: QObject,
+            event:   QEvent
+        ) -> bool:
+
+        if event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(watched, event)
+
+        if event.key() != Qt.Key.Key_Space or event.isAutoRepeat():
+            return super().eventFilter(watched, event)
+
+        if not self.play_button.isEnabled():
+            return True
+
+        self.toggle_playback()
+
+        return True
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            if self.play_button.isEnabled():
+                self.toggle_playback()
+
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+
+        self.installEventFilter(self)
+
+        for child_widget in self.findChildren(QWidget):
+            child_widget.installEventFilter(self)
+
     def cleanup_audio(self) -> None:
         self.playback_timer.stop()
         self.trim_widget.audio_data = None
 
         if self.player.is_playing:
-            self.player.set_speed(0.0, 3000)
+            self.player.fade_out_and_stop(3000)
 
         self.cleanup_threads(self.get_threads())
 
@@ -369,7 +426,7 @@ class AudioEditorBase(AudioLoadingDialog):
         super().on_cancel()
         super().closeEvent(event)
 
-# BPM Editor Layout
+# BPM Editor Section
 
 class BPMEditorBase(AudioEditorBase):
     def setup_bpm_section(self) -> None:
@@ -417,11 +474,7 @@ class BPMEditorBase(AudioEditorBase):
         self.start_bpm_pipeline()
 
     def is_bpm_thread_running(self) -> bool:
-        try:
-            return bool(self.bpm_thread and self.bpm_thread.isRunning())
-
-        except RuntimeError:
-            return False
+        return self.is_thread_running(self.bpm_thread)
 
     def start_bpm_pipeline(self) -> None:
         self.bpm_worker = Workers.BPMWorker(self.cached_wav_path)
@@ -525,7 +578,7 @@ class BPMEditorBase(AudioEditorBase):
             return
 
         self.bpm_remove_timer.stop()
-        
+
         self.finalize_bpm_placeholder()
         self.shrink_bpm_input()
 

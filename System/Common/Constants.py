@@ -1363,10 +1363,9 @@ class SettingsDict(dict, metaclass = SettingsDictionaryMeta):
 
             "Scrolling and Zoom": [
                 {
-                    "type": "selector",
-                    "title": "Trackpad Scroll Mode",
-                    "key": "trackpad_scroll_mode",
-                    "description": "Classic scrolls the timeline with a vertical two finger swipe. Directional follows the swipe axis, including diagonally.",
+                    "type":    "selector",
+                    "title":   "Trackpad Scroll Mode",
+                    "key":     "trackpad_scroll_mode",
                     "map": {
                         "Classic":     "classic",
                         "Directional": "directional"
@@ -1374,60 +1373,87 @@ class SettingsDict(dict, metaclass = SettingsDictionaryMeta):
                     "default": "Classic"
                 },
                 {
-                    "type": "slider",
-                    "title": "Zoom Step (on Wheel)",
-                    "min": 1,
-                    "max": 100,
-                    "key": "zoom_step",
+                    "type":    "slider",
+                    "title":   "Zoom Step (on Wheel)",
+                    "min":     1,
+                    "max":     100,
+                    "key":     "zoom_step",
                     "default": 20
                 },
                 {
-                    "type": "selector",
-                    "title": "Horizontal Scroll Acceleration",
-                    "key": "scroll_acceleration",
+                    "type":    "selector",
+                    "title":   "Horizontal Scroll Acceleration",
+                    "key":     "scroll_acceleration",
                     "map": {
-                        "Low": "0.1",
-                        "Normal": "0.3",
-                        "High": "0.5",
+                        "Low":       "0.1",
+                        "Normal":    "0.3",
+                        "High":      "0.5",
                         "Very high": "0.8"
                     },
                     "default": "Normal"
                 },
                 {
-                    "type": "checkbox",
-                    "title": "Scroll Smoothing",
-                    "key": "scroll_smoothing",
-                    "description": "Animates timeline scrolling. Disable to have scrolling match wheel or trackpad input exactly, with no animation.",
-                    "default": True
+                    "type":        "checkbox",
+                    "title":       "Scroll Smoothing",
+                    "key":         "scroll_smoothing",
+                    "description": "Makes scroll movement more fluid.",
+                    "default":     True
                 },
                 {
-                    "type": "checkbox",
-                    "title": "Scroll Inertia",
-                    "key": "scroll_inertia",
-                    "description": "Lets the timeline keep gliding briefly after a scroll input ends.",
-                    "default": True
+                    "type":        "checkbox",
+                    "title":       "Scroll Inertia",
+                    "key":         "scroll_inertia",
+                    "description": "Keeps scroll moving naturally after swipe.",
+                    "default":     True
                 },
                 {
-                    "type": "selector",
-                    "title": "Menu Scroll Sensitivity",
-                    "key": "wheel_scroll_sensitivity",
+                    "type":    "selector",
+                    "title":   "Menu Scroll Sensitivity",
+                    "key":     "wheel_scroll_sensitivity",
                     "map": {
-                        "Low":    "0.5",
-                        "Normal": "1.0",
-                        "High":   "1.5"
+                        "Low":    "0.125",
+                        "Normal": "0.175",
+                        "High":   "0.200"
                     },
                     "default": "Normal"
                 },
                 {
-                    "type": "selector",
-                    "title": "Menu Scroll Inertia",
-                    "key": "inertia_deceleration_rate",
+                    "type":    "selector",
+                    "title":   "Menu Scroll Inertia",
+                    "key":     "inertia_deceleration_rate",
                     "map": {
-                        "Low": 0.85,
+                        "Low":    0.85,
                         "Normal": 0.93,
-                        "High": 0.97
+                        "High":   0.97
                     },
                     "default": "Normal"
+                },
+                {
+                    "type":    "slider",
+                    "title":   "Spring Stiffness",
+                    "min":     1,
+                    "max":     10,
+                    "key":     "scroll_spring_stiffness",
+                    "default": 1
+                },
+                {
+                    "type":    "slider",
+                    "title":   "Spring Damping",
+                    "min":     10,
+                    "max":     90,
+                    "key":     "scroll_spring_damping",
+                    "default": 15
+                },
+                {
+                    "type":    "selector",
+                    "title":   "Overscroll Resistance",
+                    "key":     "overscroll_resistance",
+                    "map": {
+                        "Soft":   1200,
+                        "Normal": 600,
+                        "Rigid":  300
+                    },
+                    "default": "Soft"
                 }
             ],
 
@@ -1627,7 +1653,7 @@ class SettingsDict(dict, metaclass = SettingsDictionaryMeta):
                     "type": "checkbox",
                     "title": "Brightness Adjustment Sound",
                     "description": "Enables a sound effect when adjusting brightness.",
-                    "key": "brightness_adjustment_sound",
+                    "key": "brightness_adjustment_sounds",
                     "default": True
                 },
                 {
@@ -1648,7 +1674,7 @@ class SettingsDict(dict, metaclass = SettingsDictionaryMeta):
                     "type": "checkbox",
                     "title": "Rewind Sound Effect",
                     "description": "Enables a sound effect when auto scrolling.",
-                    "key": "rewind_sound",
+                    "key": "rewind_sounds",
                     "default": True
                 },
                 {
@@ -1748,7 +1774,33 @@ class SettingsDict(dict, metaclass = SettingsDictionaryMeta):
                         "Smooth": 3
                     },
                     "default": "Balance"
-                }
+                },
+                {
+                    "type":    "slider",
+                    "title":   "Brightness Step",
+                    "min":     1,
+                    "max":     25,
+                    "key":     "brightness_step",
+                    "default": 5
+                },
+                {
+                    "type":    "slider",
+                    "title":   "Glyph Resize Handle Width",
+                    "min":     1,
+                    "max":     25,
+                    "key":     "glyph_resize_handle_width",
+                    "default": 10
+                },
+                {
+                    "type":    "selector",
+                    "title":   "Playback Stop Mode",
+                    "key":     "playback_stop_mode",
+                    "map": {
+                        "Pause":  "pause",
+                        "Return": "return"
+                    },
+                    "default": "Pause"
+                },
             ],
 
             "Dev": [

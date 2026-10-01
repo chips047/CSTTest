@@ -58,10 +58,14 @@ def extract_glyph_data(
     }
 
 def resolve_target_segments(glyph_data: dict) -> list[int]:
-    if glyph_data["active_segments"]:
+    if glyph_data.get("active_segments"):
         return sorted(list(glyph_data["active_segments"]))
 
-    return list(range(glyph_data["total_segments"]))
+    total = glyph_data.get("total_segments")
+    if not total:
+        return []
+
+    return list(range(total))
 
 # Event Creation
 
@@ -170,10 +174,9 @@ def fade_effect(
         easing: str
     ) -> list[dict]:
 
-    glyph_data      = extract_glyph_data(glyph, model)
-    target_segments = resolve_target_segments(glyph_data)
+    glyph_data = extract_glyph_data(glyph, model)
 
-    if not target_segments:
+    if glyph_data["duration"] <= 0:
         return []
 
     event = create_glyph_event(
@@ -255,21 +258,25 @@ def bpm_effect(
         enable_fading: bool = True
     ) -> list[dict]:
 
-    glyph_data      = extract_glyph_data(glyph, model)
-    target_segments = resolve_target_segments(glyph_data)
-    if not target_segments or bpm <= 0 or multiplier <= 0 or glyph_data["duration"] <= 0:
+    glyph_data = extract_glyph_data(glyph, model)
+    if bpm <= 0 or multiplier <= 0 or glyph_data["duration"] <= 0:
         return []
 
-    actual_bpm     = bpm * multiplier
-    beat_interval  = 60000.0 / actual_bpm
-    current_time   = glyph_data["start"]
-    brightness     = glyph_data["brightness"]
-    dim_brightness = max(5, int(brightness * 0.2))
-    decay_ratio    = max(0.1, min(1.0, float(decay_length) / 100.0))
-    tick_counter   = 0
-    output         = []
+    target_segments = resolve_target_segments(glyph_data)
 
-    segment_count   = len(target_segments)
+    if mode == "Dispersion" and not target_segments:
+        mode = "Standard"
+
+    actual_bpm      = bpm * multiplier
+    beat_interval   = 60000.0 / actual_bpm
+    current_time    = glyph_data["start"]
+    brightness      = glyph_data["brightness"]
+    dim_brightness  = max(5, int(brightness * 0.2))
+    decay_ratio     = max(0.1, min(1.0, float(decay_length) / 100.0))
+    tick_counter    = 0
+    output          = []
+
+    segment_count   = len(target_segments) if target_segments else 1
     center_position = (segment_count - 1) / 2.0
     max_distance    = max(1.0, center_position)
 

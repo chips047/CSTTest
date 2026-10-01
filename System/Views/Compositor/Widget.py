@@ -206,20 +206,52 @@ class CompositorWidget(QWidget):
         logger.debug("Eject fade interrupted by a new project load, fast-forwarding audio slowdown")
 
         self.is_ejecting = False
-
         self.content_widget.playhead_timer.stop()
 
-        self.playback_manager.set_speed(
-            0.0,
-            Constants.INTERRUPTED_FADE_DURATION_MS,
-            Player.Easing.ease_out_quart,
-            use_engine_multiplier = False
+        self.playback_manager.fade_out_and_stop(
+            duration_ms = Constants.INTERRUPTED_FADE_DURATION_MS,
+            easing      = Player.Easing.ease_out_quart,
+            on_finish   = lambda: self.finish_composition_loading(composition)
         )
 
-        QTimer.singleShot(
-            Constants.INTERRUPTED_FADE_DURATION_MS,
-            lambda: self.finish_composition_loading(composition)
-        )
+    def unload_composition(self) -> None:
+        logger.warning("Unloading composition from compositor widget and clearing state")
+
+        if self.content_widget.composition:
+            self.content_widget.composition.update_progress()
+
+        self.close_active_tutorial()
+
+        self.setEnabled(False)
+
+        self.back_to_main_menu_requested.emit()
+
+        if self.playback_manager.is_playing:
+            self.is_ejecting = True
+
+            self.content_widget.playhead_timer.stop()
+            self.playback_manager.fade_out_and_stop(
+                duration_ms = Constants.EJECT_FADE_DURATION_MS,
+                easing      = Player.Easing.ease_out_quart
+            )
+
+            animation_multiplier = Constants.current_settings.get("animation_multiplier", 1.0)
+            scaled_fade_duration = int(Constants.EJECT_FADE_DURATION_MS * animation_multiplier)
+
+            QTimer.singleShot(scaled_fade_duration, self.clear_ejecting_flag)
+
+        self.content_widget.composition.syncer.stop()
+
+        self.content_widget.playhead_moved_normalized.disconnect(self.on_playhead_position_changed)
+        self.pending_mini_preview_position = None
+
+        self.mini_preview_widget.audio = None
+        self.mini_preview_widget.set_playhead_position(0.0)
+
+        self.default_effect.reset()
+        self.playspeed_button.reset()
+        self.glyph_dur_control.reset()
+        self.brightness_control.reset()
 
     def finish_composition_loading(self, composition: ProjectSaver.Composition) -> None:
         self.is_ejecting = False
@@ -242,47 +274,6 @@ class CompositorWidget(QWidget):
 
         self.window().activateWindow()
         self.content_widget.check_tutorial()
-
-    def unload_composition(self) -> None:
-        logger.warning("Unloading composition from compositor widget and clearing state")
-
-        if self.content_widget.composition:
-            self.content_widget.composition.update_progress()
-
-        self.close_active_tutorial()
-
-        self.setEnabled(False)
-
-        self.back_to_main_menu_requested.emit()
-
-        if self.playback_manager.is_playing:
-            self.is_ejecting = True
-
-            self.content_widget.playhead_timer.stop()
-            self.playback_manager.set_speed(
-                0.0,
-                Constants.EJECT_FADE_DURATION_MS,
-                Player.Easing.ease_out_quart,
-                use_engine_multiplier = True
-            )
-
-            animation_multiplier = Constants.current_settings.get("animation_multiplier", 1.0)
-            scaled_fade_duration = int(Constants.EJECT_FADE_DURATION_MS * animation_multiplier)
-
-            QTimer.singleShot(scaled_fade_duration, self.clear_ejecting_flag)
-
-        self.content_widget.composition.syncer.stop()
-
-        self.content_widget.playhead_moved_normalized.disconnect(self.on_playhead_position_changed)
-        self.pending_mini_preview_position = None
-
-        self.mini_preview_widget.audio = None
-        self.mini_preview_widget.set_playhead_position(0.0)
-
-        self.default_effect.reset()
-        self.playspeed_button.reset()
-        self.glyph_dur_control.reset()
-        self.brightness_control.reset()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.content_widget.composition:

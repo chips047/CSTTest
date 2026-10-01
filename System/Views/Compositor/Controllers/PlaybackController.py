@@ -27,6 +27,7 @@ class PlaybackController(QObject):
         self.pending_start_position_ms = 0.0
         self.playhead_start_ms         = 0.0
         self.playhead_start_time       = 0.0
+        self.initial_start_position_ms = 0.0
         self.is_auto_scroll_active     = False
 
         self.delay_timer.setSingleShot(True)
@@ -143,9 +144,12 @@ class PlaybackController(QObject):
 
         horizontal_bar.setValue(target_scroll)
 
+    # Playback Control
+
     def on_playback_state_changed(self, is_playing: bool) -> None:
         if not is_playing:
             self.stop_playback()
+
             return
 
         duration_ms = self.playback_manager.duration_ms
@@ -154,6 +158,7 @@ class PlaybackController(QObject):
             self.set_playhead_position_ms(0.0)
             self.conductor.horizontalScrollBar().setValue(0)
 
+        self.initial_start_position_ms = self.get_playhead_position_ms()
         self.start_playback()
 
         horizontal_bar = self.conductor.horizontalScrollBar()
@@ -164,8 +169,9 @@ class PlaybackController(QObject):
             self.is_auto_scroll_active = True
             self.sync_scroll_to_playhead()
 
-        else:
-            self.is_auto_scroll_active = False
+            return
+
+        self.is_auto_scroll_active = False
 
     def start_playback(self) -> None:
         if self.delay_timer.isActive():
@@ -206,30 +212,39 @@ class PlaybackController(QObject):
         self.playhead_start_time = time.perf_counter()
 
     def stop_playback(self) -> None:
-        if self.delay_timer.isActive():
-            self.delay_timer.stop()
-
-        self.playhead_timer.stop()
-
-        if self.conductor.glyph_visualizer:
-            self.conductor.glyph_visualizer.stop_all()
-
-        if self.conductor.composition:
-            self.conductor.composition.syncer.stop()
-
-        duration_ms = self.playback_manager.duration_ms
-
-        if duration_ms > 0:
-            engine_position_ms = self.playback_manager.get_position()
-            current_ms         = self.get_playhead_position_ms()
-
-            if engine_position_ms >= (duration_ms - 5.0) or (duration_ms - current_ms) <= 60.0:
-                self.set_playhead_position_ms(duration_ms)
-
-                if self.is_auto_scroll_active:
-                    self.sync_scroll_to_playhead()
-
-        self.is_auto_scroll_active = False
+            if self.delay_timer.isActive():
+                self.delay_timer.stop()
+    
+            self.playhead_timer.stop()
+    
+            if self.conductor.glyph_visualizer:
+                self.conductor.glyph_visualizer.stop_all()
+    
+            if self.conductor.composition:
+                self.conductor.composition.syncer.stop()
+    
+            stop_mode = Constants.current_settings.get("playback_stop_mode", "pause")
+    
+            if stop_mode == "return":
+                self.set_playhead_position_ms(self.initial_start_position_ms)
+                self.scroll_to_playhead()
+                self.is_auto_scroll_active = False
+    
+                return
+    
+            duration_ms = self.playback_manager.duration_ms
+    
+            if duration_ms > 0:
+                engine_position_ms = self.playback_manager.get_position()
+                current_ms         = self.get_playhead_position_ms()
+    
+                if engine_position_ms >= (duration_ms - 5.0) or (duration_ms - current_ms) <= 60.0:
+                    self.set_playhead_position_ms(duration_ms)
+    
+                    if self.is_auto_scroll_active:
+                        self.sync_scroll_to_playhead()
+    
+            self.is_auto_scroll_active = False
 
     # Lifecycle
 

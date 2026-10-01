@@ -10,24 +10,21 @@ from loguru import logger
 
 from PyQt6.QtCore import (
     Qt,
+    QSize,
+    QEvent,
     QTimer,
-    pyqtSignal,
-    pyqtProperty,
-    QPropertyAnimation
+    QObject,
+    pyqtSignal
 )
 
 from PyQt6.QtGui import (
     QIcon,
-    QBrush,
-    QColor,
-    QPainter,
     QDropEvent,
     QShowEvent,
-    QPaintEvent,
-    QResizeEvent,
+    QFocusEvent,
+    QMouseEvent,
     QDragEnterEvent,
-    QDragLeaveEvent,
-    QLinearGradient
+    QDragLeaveEvent
 )
 
 from PyQt6.QtWidgets import (
@@ -37,7 +34,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QApplication
@@ -53,6 +49,8 @@ from System.Interface import (
     Widgets,
     Windows
 )
+
+from System.Interface.Widgets.ScrollArea import ElasticScrollArea
 
 from System.Services import (
     Player,
@@ -91,6 +89,7 @@ def get_search_score(
 
     if all(token in all_fields for token in tokens):
         title_hits = sum(1 for token in tokens if token in normalized_title)
+
         return 0.8 + (0.2 * title_hits / len(tokens))
 
     title_ratio = difflib.SequenceMatcher(None, normalized_query, normalized_title).ratio()
@@ -129,6 +128,7 @@ def get_projects_info(songs_folder: str) -> dict[str, dict[str, object]]:
 
             if lower_name.endswith((".mp3", ".wav", ".ogg", ".flac")):
                 audio_path = os.path.join(project_path, file_name)
+
                 continue
 
             if lower_name.endswith(".json"):
@@ -137,6 +137,7 @@ def get_projects_info(songs_folder: str) -> dict[str, dict[str, object]]:
         if not audio_path or not json_path:
             logger.warning(f"Project '{project_name}' is missing audio or JSON file. Removing.")
             shutil.rmtree(project_path, ignore_errors = True)
+
             continue
 
         try:
@@ -188,7 +189,6 @@ class TrackItemWidget(QWidget):
         self.project_identifier = project_identifier
         self.main_menu          = main_menu
 
-        self.setMinimumWidth(240)
         self.setFixedHeight(120)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -219,10 +219,12 @@ class TrackItemWidget(QWidget):
         self.title_label = QLabel(title)
         self.title_label.setFont(Utils.NType(11.5))
         self.title_label.setStyleSheet(Styles.Other.Font)
+        self.title_label.setMinimumWidth(0)
 
         self.artist_label = QLabel(f"{artist}  {subtitle}")
         self.artist_label.setFont(Utils.NType(9))
         self.artist_label.setStyleSheet(Styles.Other.SecondFont)
+        self.artist_label.setMinimumWidth(0)
 
         info_layout.addWidget(self.title_label)
         info_layout.addWidget(self.artist_label)
@@ -248,6 +250,7 @@ class TrackItemWidget(QWidget):
             button = Widgets.IconButtonSmall(
                 QIcon(f"System/Assets/Icons/ProjectMenu/{icon_name}")
             )
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.clicked.connect(slot_handler)
             icons_layout.addWidget(button)
 
@@ -256,6 +259,12 @@ class TrackItemWidget(QWidget):
 
         content_layout.addLayout(top_layout)
         content_layout.addLayout(bottom_layout)
+
+    def sizeHint(self) -> QSize:
+        return QSize(0, 120)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, 120)
 
     def update_information(
             self,
@@ -290,132 +299,6 @@ class TrackItemWidget(QWidget):
     def on_export_clicked(self) -> None:
         composition = ProjectSaver.MinimalComposition(self.project_identifier)
         Windows.ExportDialogWindow(composition).exec()
-
-# Fade Overlay Widget
-
-class FadeOverlay(QWidget):
-    def __init__(
-            self,
-            color:             QColor,
-            is_top_positioned: bool,
-            parent:            QWidget | None = None
-        ) -> None:
-
-        super().__init__(parent)
-
-        self.overlay_color     = color
-        self.is_top_positioned = is_top_positioned
-        self.opacity_value     = 1.0
-
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setOpacity(self.opacity_value)
-
-        gradient = QLinearGradient(0, 0, 0, self.height())
-
-        opaque_color = QColor(self.overlay_color)
-        opaque_color.setAlpha(255)
-
-        transparent_color = QColor(self.overlay_color)
-        transparent_color.setAlpha(0)
-
-        if self.is_top_positioned:
-            gradient.setColorAt(0, opaque_color)
-            gradient.setColorAt(1, transparent_color)
-
-        else:
-            gradient.setColorAt(0, transparent_color)
-            gradient.setColorAt(1, opaque_color)
-
-        painter.setBrush(QBrush(gradient))
-        painter.drawRect(self.rect())
-
-    @pyqtProperty(float)
-    def opacity(self) -> float:
-        return self.opacity_value
-
-    @opacity.setter
-    def opacity(self, value: float) -> None:
-        self.opacity_value = value
-        self.update()
-
-# Fade Scroll Area
-
-class FadeScrollArea(QScrollArea):
-    def __init__(
-            self,
-            fade_color:  QColor         = QColor("#000000"),
-            fade_height: int            = 40,
-            parent:      QWidget | None = None
-        ) -> None:
-
-        super().__init__(parent)
-
-        self.fade_color  = fade_color
-        self.fade_height = fade_height
-        self.animations  = {}
-
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        self.top_fade    = FadeOverlay(self.fade_color, True, self)
-        self.bottom_fade = FadeOverlay(self.fade_color, False, self)
-
-        self.top_fade.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.bottom_fade.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-        self.verticalScrollBar().valueChanged.connect(self.update_fade_visibility)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-
-        viewport_width = self.viewport().width()
-
-        self.top_fade.setGeometry(0, 0, viewport_width, self.fade_height)
-        self.bottom_fade.setGeometry(0, self.height() - self.fade_height, viewport_width, self.fade_height)
-
-        self.update_fade_visibility()
-
-    def update_fade_visibility(self, value: int = 0) -> None:
-        scroll_value  = self.verticalScrollBar().value()
-        maximum_value = self.verticalScrollBar().maximum()
-
-        self.animate_fade(self.top_fade,    scroll_value > 0)
-        self.animate_fade(self.bottom_fade, scroll_value < maximum_value)
-
-    def animate_fade(
-            self,
-            widget:            FadeOverlay,
-            should_be_visible: bool
-        ) -> None:
-
-        target_opacity  = 1.0 if should_be_visible else 0.0
-        current_opacity = widget.opacity
-
-        if current_opacity == target_opacity:
-            return
-
-        if widget in self.animations:
-            self.animations[widget].stop()
-
-        animation = QPropertyAnimation(widget, b"opacity")
-        animation.setDuration(175)
-        animation.setStartValue(current_opacity)
-        animation.setEndValue(target_opacity)
-
-        if should_be_visible:
-            widget.show()
-
-        else:
-            animation.finished.connect(lambda target_widget = widget: target_widget.hide())
-
-        animation.start()
-        self.animations[widget] = animation
 
 # Main Menu Widget
 
@@ -485,51 +368,33 @@ class MainMenu(QWidget):
         button_layout.addWidget(button_panel)
 
         self.search_box = Widgets.SearchTextbox()
+        self.search_box.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.search_box.installEventFilter(self)
         self.search_box.safeTextChanged.connect(self.apply_search_filter)
 
         button_layout.addWidget(self.search_box)
         container_layout.addWidget(button_container)
 
-        tracks_container = QFrame()
-        tracks_container.setStyleSheet(
-            """
-                QFrame {
-                    border-radius: 30px;
-                    background: transparent;
-                }
-            """
-        )
-
-        self.tracks_layout = QVBoxLayout(tracks_container)
-        self.tracks_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.scroll_area = FadeScrollArea(QColor(Styles.Colors.Background))
-        self.scroll_area.setStyleSheet(
-            """
-                QScrollArea {
-                    border: none;
-                    background: transparent;
-                    border-radius: 24px;
-                }
-                QScrollBar:vertical {
-                    width: 0px;
-                }
-            """
-        )
-        self.scroll_area.setWidget(tracks_container)
-        container_layout.addWidget(self.scroll_area)
+        self.scroll_area = ElasticScrollArea(self, Styles.Colors.Background)
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.tracks_grid_widget = QWidget()
         self.tracks_grid_layout = QGridLayout(self.tracks_grid_widget)
         self.tracks_grid_layout.setSpacing(12)
         self.tracks_grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.tracks_grid_layout.setColumnStretch(0, 1)
+        self.tracks_grid_layout.setColumnStretch(1, 1)
 
         self.tracks_grid_widget.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Maximum
         )
 
-        self.tracks_layout.addWidget(self.tracks_grid_widget, alignment = Qt.AlignmentFlag.AlignTop)
+        self.scroll_area.add_widget(self.tracks_grid_widget)
+        container_layout.addWidget(self.scroll_area)
 
     def create_button_panel(self) -> QWidget:
         panel        = QWidget()
@@ -562,10 +427,11 @@ class MainMenu(QWidget):
                 is_accented,
                 callback_handler
             )
+            option_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             panel_layout.addWidget(option_button)
 
         panel.setStyleSheet("background-color: transparent;")
-        
+
         return panel
 
     def get_visible_projects(self, search_text: str) -> list[tuple[str, dict[str, object]]]:
@@ -611,7 +477,7 @@ class MainMenu(QWidget):
         for project_identifier, project_data in self.projects_info.items():
             title_text    = str(project_data["title"])
             artist_text   = str(project_data["artist"])
-            subtitle_text = f"- {project_data['model'] or ''} • {project_data.get('progress', 0.0)}%"
+            subtitle_text = f"- {project_data['model'] or ''} - {project_data.get('progress', 0.0)}%"
 
             if project_identifier in self.track_widgets:
                 self.track_widgets[project_identifier].update_information(
@@ -619,6 +485,7 @@ class MainMenu(QWidget):
                     artist_text,
                     subtitle_text
                 )
+
                 continue
 
             track_item = TrackItemWidget(
@@ -656,6 +523,58 @@ class MainMenu(QWidget):
             if matched_widget:
                 self.tracks_grid_layout.addWidget(matched_widget, row, column)
                 matched_widget.show()
+
+        self.scroll_area.raw_scroll_position = 0.0
+        self.scroll_area.velocity_speed      = 0.0
+        self.scroll_area.apply_content_position()
+        self.scroll_area.update_canvas_geometry()
+
+    def refocus_search_box(self) -> None:
+        if not self.search_box:
+            return
+
+        active_modal_widget = QApplication.activeModalWidget()
+
+        if active_modal_widget is not None:
+            return
+
+        active_window = QApplication.activeWindow()
+
+        if active_window is not None and active_window is not self.window():
+            return
+
+        if not self.search_box.hasFocus():
+            self.search_box.setFocus()
+
+    def eventFilter(
+            self,
+            watched_object: QObject,
+            event:          QEvent
+        ) -> bool:
+
+        if watched_object is self.search_box and event.type() == QEvent.Type.FocusOut:
+            focus_event = event
+
+            if isinstance(focus_event, QFocusEvent):
+                should_ignore_reason = focus_event.reason() in (
+                    Qt.FocusReason.ActiveWindowFocusReason,
+                    Qt.FocusReason.PopupFocusReason
+                )
+
+                if not should_ignore_reason and self.window().isActiveWindow():
+                    QTimer.singleShot(0, self.refocus_search_box)
+
+        return super().eventFilter(watched_object, event)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self.refocus_search_box()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        self.refocus_search_box()
 
     def process_new_composition(self, file_path: str) -> None:
         audio_dialog = Windows.AudioSetupDialog(file_path)
@@ -715,6 +634,7 @@ class MainMenu(QWidget):
 
             if mime_type.startswith("audio") or mime_type.startswith("video"):
                 file_to_process = candidate_path
+
                 break
 
         if not file_to_process:
@@ -734,6 +654,7 @@ class MainMenu(QWidget):
                 )
             )
             super().dropEvent(event)
+
             return
 
         Player.ui_player.play_sound(
@@ -750,6 +671,7 @@ class MainMenu(QWidget):
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self.refresh_tracks()
+        self.refocus_search_box()
 
     def on_settings(self) -> None:
         settings_dialog = Windows.SettingsWindow()
@@ -778,14 +700,17 @@ class MainMenu(QWidget):
 
         if has_shift and has_ctrl:
             Windows.WalterWindow().exec()
+
             return
 
         if has_shift:
             Windows.ByteBeatWindow().exec()
+
             return
 
         if has_alt:
             Windows.AboutWindow(more_info = True).exec()
+
             return
 
         Windows.AboutWindow().exec()
@@ -799,7 +724,7 @@ class MainMenu(QWidget):
 
     def on_audio_settings(self, project_identifier: str) -> None:
         try:
-            composition  = ProjectSaver.Composition(id = project_identifier)
+            composition  = ProjectSaver.Composition(identifier = project_identifier)
             audio_window = Windows.ExistingAudioSetupDialog(composition)
 
             if not audio_window.exec():
