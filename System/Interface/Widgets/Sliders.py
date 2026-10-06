@@ -1,3 +1,6 @@
+from time import monotonic
+from random import randint
+
 from PyQt6.QtGui import (
     QHideEvent,
     QShowEvent,
@@ -109,11 +112,13 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
         ) -> None:
         super().__init__()
 
-        self.minimum_value          = minimum_value
-        self.maximum_value          = maximum_value
-        self.target_value           = default_value
-        self.show_animation_pending = True
-        self.slider_is_dragging     = False
+        self.minimum_value                  = minimum_value
+        self.maximum_value                  = maximum_value
+        self.target_value                   = default_value
+        self.show_animation_pending         = True
+        self.slider_is_dragging             = False
+        self.last_sound_timestamp_seconds   = 0.0
+        self.minimum_sound_interval_seconds = 1.0 / 15.0
 
         self.setMaximumHeight(68)
         self.inner_layout.setContentsMargins(12, 8, 12, 8)
@@ -127,10 +132,23 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
         self.slider.sliderReleased.connect(self.handle_slider_released)
         self.slider.valueChanged.connect(self.handle_slider_value_changed)
 
+    # Setup Methods
+
+    def create_label(
+            self,
+            text:           str,
+            font_size:      int,
+            alignment_flag: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignLeft
+        ) -> QLabel:
+        label = QLabel(text)
+        label.setFont(Utils.NType(font_size))
+        label.setStyleSheet("color: #dddddd; padding: 0px; border: none;")
+        label.setAlignment(alignment_flag)
+
+        return label
+
     def setup_label(self, description: str) -> None:
-        self.description_label = QLabel(description)
-        self.description_label.setFont(Utils.NType(11))
-        self.description_label.setStyleSheet("color: #ddd; padding: 0px; border: none;")
+        self.description_label = self.create_label(description, 11)
 
         self.inner_layout.addWidget(self.description_label)
 
@@ -148,10 +166,11 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
 
         slider_value_layout.addWidget(self.slider, 1)
 
-        self.value_label = QLabel(str(default_value))
-        self.value_label.setFont(Utils.NType(12))
-        self.value_label.setStyleSheet("color: #dddddd; padding: 0px; border: none;")
-        self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.value_label = self.create_label(
+            str(default_value),
+            12,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
 
         slider_value_layout.addWidget(self.value_label, 0)
 
@@ -166,20 +185,41 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
             on_change  = self.on_animated_value_changed
         )
 
-    def on_animated_value_changed(self, value: float) -> None:
-        rounded_value = int(round(value))
+    # Audio Feedback
 
-        self.slider.blockSignals(True)
-        self.slider.setValue(rounded_value)
-        self.slider.blockSignals(False)
+    def play_slider_tick_sound(self, current_value: int) -> None:
+        if self.maximum_value <= self.minimum_value:
+            return
 
-        self.value_label.setText(str(rounded_value))
+        current_timestamp_seconds = monotonic()
+        time_difference_seconds   = current_timestamp_seconds - self.last_sound_timestamp_seconds
 
-    def clamp_value(self, value: int) -> int:
-        return max(self.minimum_value, min(self.maximum_value, value))
+        if time_difference_seconds < self.minimum_sound_interval_seconds:
+            return
+
+        self.last_sound_timestamp_seconds = current_timestamp_seconds
+
+        progress_ratio = (current_value - self.minimum_value) / (self.maximum_value - self.minimum_value)
+        playback_speed = progress_ratio + 0.7
+        stereo_pan     = progress_ratio * 2.0 - 1.0
+        sound_variant  = randint(1, 3)
+
+        if self.slider.invertedAppearance():
+            stereo_pan = -stereo_pan
+
+        Player.ui_player.play_sound(
+            f"Feedback/Slider/Tick{sound_variant}",
+            speed  = playback_speed,
+            volume = 0.8,
+            pan    = stereo_pan
+        )
+
+    # Event Handlers
 
     def handle_slider_pressed(self) -> None:
-        self.slider_is_dragging = True
+        self.slider_is_dragging           = True
+        self.last_sound_timestamp_seconds = 0.0
+
         self.value_handle.stop_targeting()
 
     def handle_slider_released(self) -> None:
@@ -193,14 +233,18 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
         if not self.slider_is_dragging:
             return
 
-        if self.maximum_value <= self.minimum_value:
-            return
+        self.play_slider_tick_sound(value)
 
-        if self.maximum_value >= 30:
-            return
+    # Animation Logic
 
-        tone = (value - self.minimum_value) / (self.maximum_value - self.minimum_value) + 0.1
-        Player.ui_player.play_sound("Click/Toggle2", speed = tone, volume = 0.8)
+    def on_animated_value_changed(self, value: float) -> None:
+        rounded_value = int(round(value))
+
+        self.slider.blockSignals(True)
+        self.slider.setValue(rounded_value)
+        self.slider.blockSignals(False)
+
+        self.value_label.setText(str(rounded_value))
 
     def start_value_animation(self, target_value: int) -> None:
         self.value_handle.set_target(
@@ -226,6 +270,8 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
 
         self.start_value_animation(self.target_value)
 
+    # Lifecycle Events
+
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
 
@@ -233,6 +279,7 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
             return
 
         self.show_animation_pending = False
+
         self.play_show_animation()
 
     def hideEvent(self, event: QHideEvent) -> None:
@@ -242,6 +289,8 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
         self.slider_is_dragging     = False
 
         self.value_handle.stop()
+
+    # Getters And Setters
 
     def value(self) -> int:
         if self.slider_is_dragging:
@@ -264,15 +313,19 @@ class SliderWithLabel(Lifecycle.LoomAnimationMixin, Widgets.BaseControlContainer
         self.slider.setValue(self.minimum_value if self.show_animation_pending else target_value)
         self.slider.blockSignals(False)
 
+    def getValueAsText(self) -> str:
+        return str(self.value())
+
+    # Helpers
+
+    def clamp_value(self, value: int) -> int:
+        return max(self.minimum_value, min(self.maximum_value, value))
+
     def parse_value(self, value: int | float | str) -> int:
         if isinstance(value, (int, float)):
             return int(value)
 
-        elif isinstance(value, str) and value.isdigit():
+        if isinstance(value, str) and value.isdigit():
             return int(value)
 
-        else:
-            return self.target_value
-
-    def getValueAsText(self) -> str:
-        return str(self.value())
+        return self.target_value

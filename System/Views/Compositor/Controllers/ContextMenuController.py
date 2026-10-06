@@ -50,10 +50,15 @@ class ContextMenuController(QObject):
             return
 
         try:
-            scene_position   = self.conductor.mapToScene(event.pos())
-            item_under_mouse = self.conductor.scene.itemAt(scene_position, self.conductor.transform())
+            scene_position = self.conductor.mapToScene(event.pos())
+            
+            items_at_pos = self.conductor.scene.items(scene_position)
+            item_under_mouse = next(
+                (item for item in items_at_pos if isinstance(item, Widgets.GlyphItem)),
+                None
+            )
 
-            if not isinstance(item_under_mouse, Widgets.GlyphItem):
+            if not item_under_mouse:
                 return
 
             if not item_under_mouse.isSelected():
@@ -65,6 +70,7 @@ class ContextMenuController(QObject):
                 for item in self.conductor.scene.selectedItems()
                 if isinstance(item, Widgets.GlyphItem)
             ]
+
             selected_ids = [item.glyph_id for item in selected_items]
 
             clicked_glyph = self.conductor.composition.get_glyph(item_under_mouse.glyph_id)

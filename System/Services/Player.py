@@ -89,6 +89,15 @@ class PlaybackManager(QObject):
         self.pulse_timer                    = None
         self.property_timers                = {}
 
+        self.is_scrubbing                   = False
+        self.was_playing_before_scrub       = False
+        self.scrub_target_position_ms       = 0.0
+        self.scrub_last_target_position_ms  = 0.0
+        self.scrub_last_event_time          = 0.0
+        self.scrub_speed_filtered           = 0.0
+        self.scrub_friction_timer           = None
+        self.supports_reverse_resampling    = False
+
         self.defaults                       = []
         self.eq_low_states                  = None
         self.eq_mid_states                  = None
@@ -147,7 +156,7 @@ class PlaybackManager(QObject):
 
     @property
     def is_actively_playing(self) -> bool:
-        return self.is_playing and not self.is_stopping and self.speed > 0.05
+        return (self.is_playing and not self.is_stopping and self.speed > 0.05) or self.is_scrubbing
 
     def setup_effect_properties(self) -> None:
         self.defaults = [
@@ -184,6 +193,12 @@ class PlaybackManager(QObject):
             property_handle = ui_engine.bind(self, name, base_value, on_change = callback)
 
             setattr(self, f"{name}_property", property_handle)
+
+        self.scrub_friction_timer = QTimer(self)
+        self.scrub_friction_timer.setInterval(25)
+        self.scrub_friction_timer.timeout.connect(self.process_scrub_friction_tick)
+
+        self.supports_reverse_resampling = self.detect_reverse_support()
 
     def cancel_property_timer(self, property_name: str) -> None:
         if property_name not in self.property_timers:
@@ -264,6 +279,16 @@ class PlaybackManager(QObject):
             self.pulse_timer.deleteLater()
             self.pulse_timer = None
 
+        if self.scrub_friction_timer is not None and self.scrub_friction_timer.isActive():
+            self.scrub_friction_timer.stop()
+
+        self.is_scrubbing                   = False
+        self.was_playing_before_scrub       = False
+        self.scrub_target_position_ms       = 0.0
+        self.scrub_last_target_position_ms  = 0.0
+        self.scrub_last_event_time          = 0.0
+        self.scrub_speed_filtered           = 0.0
+
         self.base_speed                     = 1.0
         self.is_stopping                    = False
         self.is_pulsing                     = False
@@ -306,6 +331,174 @@ class PlaybackManager(QObject):
         self.echo_random_delay_spread_ms    = 70.0
         self.echo_random_feedback_spread    = 0.08
         self.echo_random_mix_spread         = 0.05
+
+    # Scrubbing Engine
+
+    def detect_reverse_support(self) -> bool:
+        try:
+            test_buffer = numpy.zeros((32, 2), dtype = numpy.float32)
+            zero_delays = numpy.zeros(2, dtype = numpy.float64)
+
+            result = PlayerFunctions.resample_block(
+                test_buffer,
+                numpy.float64(16.0),
+                numpy.float64(-1.0),
+                zero_delays,
+                4
+            )
+
+            return result is not None and len(result) == 4
+
+        except Exception:
+            return False
+
+    def start_scrubbing(self, start_position_ms: float) -> None:
+        if self.data is None:
+            return
+
+        self.was_playing_before_scrub = self.is_playing
+        self.is_scrubbing             = True
+
+        self.scrub_target_position_ms      = max(0.0, min(self.duration_ms, float(start_position_ms)))
+        self.scrub_last_target_position_ms = self.scrub_target_position_ms
+        self.scrub_last_event_time         = time.perf_counter()
+        self.scrub_speed_filtered          = 0.0
+
+        self.ensure_stream_opened()
+
+        with self.lock:
+            self.position   = (self.scrub_target_position_ms * self.sample_rate) / 1000.0
+            self.is_playing = True
+
+        self.speed_property.set_base(0.0)
+
+        if not self.scrub_friction_timer.isActive():
+            self.scrub_friction_timer.start()
+
+    def update_scrubbing(self, target_position_ms: float) -> None:
+        if self.data is None:
+            return
+
+        if not self.is_scrubbing:
+            self.start_scrubbing(target_position_ms)
+            return
+
+        current_time   = time.perf_counter()
+        delta_time_sec = current_time - self.scrub_last_event_time
+
+        if delta_time_sec <= 0.001:
+            return
+
+        clamped_target_ms = max(0.0, min(self.duration_ms, float(target_position_ms)))
+        delta_audio_ms    = clamped_target_ms - self.scrub_last_target_position_ms
+
+        self.scrub_target_position_ms      = clamped_target_ms
+        self.scrub_last_target_position_ms = clamped_target_ms
+        self.scrub_last_event_time         = current_time
+
+        instant_speed = (delta_audio_ms / 1000.0) / delta_time_sec
+
+        if not self.supports_reverse_resampling:
+            instant_speed = abs(instant_speed)
+
+            with self.lock:
+                self.position = (clamped_target_ms * self.sample_rate) / 1000.0
+
+        clamped_speed             = max(-2.5, min(2.5, instant_speed))
+        self.scrub_speed_filtered = self.scrub_speed_filtered * 0.35 + clamped_speed * 0.65
+
+        speed_magnitude = abs(self.scrub_speed_filtered)
+
+        self.speed_property.set_base(self.scrub_speed_filtered)
+        self.apply_scrub_audio_shaping(speed_magnitude)
+
+    def stop_scrubbing(self) -> None:
+        if not self.is_scrubbing:
+            return
+
+        self.is_scrubbing = False
+
+        if self.scrub_friction_timer.isActive():
+            self.scrub_friction_timer.stop()
+
+        self.set_eq(low = 1.0, mid = 1.0, high = 1.0, duration_ms = 120)
+        self.set_background_noise(mix = 0.0, duration_ms = 120)
+
+        if self.was_playing_before_scrub:
+            with self.lock:
+                self.playback_start_audio_ms  = self.get_position()
+                self.playback_start_wall_time = time.time()
+
+            self.set_speed(
+                self.base_speed,
+                duration_ms           = 180,
+                easing                = Easing.ease_out_quad,
+                use_engine_multiplier = False
+            )
+            self.playback_state_changed.emit(True)
+
+            return
+
+        def on_finish_stop() -> None:
+            self.stop()
+            self.speed_property.set_base(self.base_speed)
+
+        self.set_speed(
+            0.0,
+            duration_ms           = 60,
+            easing                = Easing.ease_out_quad,
+            on_finish             = on_finish_stop,
+            use_engine_multiplier = False
+        )
+
+    def process_scrub_friction_tick(self) -> None:
+        if not self.is_scrubbing:
+            self.scrub_friction_timer.stop()
+            return
+
+        elapsed_since_event_sec = time.perf_counter() - self.scrub_last_event_time
+
+        if elapsed_since_event_sec < 0.04:
+            return
+
+        self.scrub_speed_filtered *= 0.70
+
+        if abs(self.scrub_speed_filtered) < 0.03:
+            self.scrub_speed_filtered = 0.0
+
+        speed_magnitude = abs(self.scrub_speed_filtered)
+
+        self.speed_property.set_base(self.scrub_speed_filtered)
+        self.apply_scrub_audio_shaping(speed_magnitude)
+
+    def apply_scrub_audio_shaping(self, speed_magnitude: float) -> None:
+        if speed_magnitude < 0.8:
+            high_gain = max(0.15, speed_magnitude * 1.25)
+            low_gain  = min(1.7, 1.0 + (1.0 - speed_magnitude) * 0.7)
+            noise_mix = min(0.03, speed_magnitude * 0.02)
+
+        else:
+            high_gain = 1.0
+            low_gain  = 1.0
+            noise_mix = 0.0
+
+        self.set_eq(low = low_gain, mid = 1.0, high = high_gain, duration_ms = 40)
+        self.set_background_noise(mix = noise_mix, duration_ms = 40)
+
+    def synchronize_scrub_position(self, frames: int) -> None:
+        if self.sample_rate <= 0:
+            return
+
+        target_sample = (self.scrub_target_position_ms * self.sample_rate) / 1000.0
+        discrepancy   = abs(self.position - target_sample)
+
+        if discrepancy > (self.sample_rate * 0.5):
+            self.position = target_sample
+            return
+
+        self.position = self.position * 0.80 + target_sample * 0.20
+
+    # Beat Detection
 
     def setup_beat_detection(self) -> None:
         self.window_size         = 2048
@@ -478,6 +671,12 @@ class PlaybackManager(QObject):
             self.stream_block_size = 0
 
     def get_position(self) -> float:
+        if self.is_scrubbing:
+            if self.sample_rate > 0:
+                return (self.position / self.sample_rate) * 1000.0
+
+            return self.scrub_target_position_ms
+
         if not self.is_playing:
             return self.playback_start_audio_ms
 
@@ -711,7 +910,12 @@ class PlaybackManager(QObject):
 
         return PlayerFunctions.apply_reverb_block(block, tap_one, tap_two, float(context["reverb_mix"]))
 
-    def apply_passes(self, block: numpy.ndarray, context: dict[str, object]) -> numpy.ndarray:
+    def apply_passes(
+            self,
+            block:   numpy.ndarray,
+            context: dict[str, object]
+        ) -> numpy.ndarray:
+
         pass_mix = float(context["pass_mix"])
 
         if pass_mix <= 0.0:
@@ -720,21 +924,21 @@ class PlaybackManager(QObject):
         with self.lock:
             if len(self.pass_frequencies) <= 0:
                 return block
-            
+
             self.ensure_pass_states(block.shape[1])
 
             frequencies = list(self.pass_frequencies)
             states      = self.pass_states
 
         pass_q = max(0.1, float(context["pass_q"]))
-        
+
         coefficients = numpy.array([
             PlayerFunctions.calculate_bandpass_coefficients(
-                float(freq),
+                float(frequency),
                 pass_q,
                 float(self.sample_rate)
             )
-            for freq in frequencies
+            for frequency in frequencies
         ], dtype = numpy.float64)
 
         if states.shape[0] != len(coefficients):
@@ -965,9 +1169,18 @@ class PlaybackManager(QObject):
     def process_audio_chunk(self, frames: int) -> numpy.ndarray:
         context = self.build_processing_context()
 
+        if self.is_scrubbing:
+            self.synchronize_scrub_position(frames)
+
         self.check_start_radio_noise(float(context["radio_noise_intensity"]))
 
         block = self.generate_audio_block(frames, context)
+
+        if self.is_scrubbing:
+            speed_magnitude = abs(float(context["speed"]))
+
+            if speed_magnitude < 0.05:
+                block *= (speed_magnitude / 0.05)
 
         self.process_beat_detection(block)
 
@@ -993,7 +1206,7 @@ class PlaybackManager(QObject):
             level_decay_factor       = math.exp(-chunk_duration_ms / self.level_decay_ms)
             self.current_audio_level = self.current_audio_level * level_decay_factor
 
-        if self.position >= len(self.data):
+        if not self.is_scrubbing and self.position >= len(self.data):
             self.position = float(len(self.data))
             self.stop()
 
@@ -1081,6 +1294,7 @@ class PlaybackManager(QObject):
             duration_ms: int          = 0,
             easing:      Easing       = Easing.smooth
         ) -> None:
+
         if left_to_ms is None and right_to_ms is None:
             return
 
@@ -1189,8 +1403,8 @@ class PlaybackManager(QObject):
 
     def pulse_speed(
             self,
-            pulse_peak_speed: float = 1.2,
-            duration_ms:      int   = 300,
+            pulse_peak_speed: float  = 1.2,
+            duration_ms:      int    = 300,
             easing:           Easing = Easing.ease_out_cubic
         ) -> None:
 
@@ -1896,7 +2110,7 @@ class ByteBeatPlayer:
             output_buffer: numpy.ndarray,
             count:         int
         ) -> None:
-        
+
         if count <= 0:
             return
 

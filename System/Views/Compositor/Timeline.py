@@ -255,6 +255,7 @@ class ScrollableContent(QGraphicsView):
         self.scale_controller.scale_finished.connect(self.glyph_controller.update_all_glyphs)
         self.scale_controller.scale_updated.connect(self.glyph_controller.update_all_glyphs)
         self.scale_controller.animation_state_changed.connect(self.wheel_controller.set_scale_animation_active)
+        self.scale_controller.animation_state_changed.connect(self.on_scale_animation_state_changed)
 
         self.glyph_controller.drag_state_changed.connect(self.mouse_controller.set_glyphs_dragging)
         self.glyph_controller.elements_changed.connect(self.parent().on_elements_changed)
@@ -738,6 +739,12 @@ class ScrollableContent(QGraphicsView):
             force_update,
             anchor_viewport_x
         )
+
+    def on_scale_animation_state_changed(self, is_active: bool) -> None:
+        if not self.glyph_controller:
+            return
+
+        self.glyph_controller.set_caching_active(not is_active)
 
     # Scrolling Section
 

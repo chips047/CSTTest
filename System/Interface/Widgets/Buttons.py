@@ -68,7 +68,7 @@ class BaseButton(Lifecycle.LoomAnimationMixin, QPushButton):
             text:                 str | None     = None,
             icon:                 QIcon | None   = None,
             parent:               QWidget | None = None,
-            enable_glitch_effect: bool           = False
+            enable_glitch_effect: bool           = True
         ) -> None:
 
         if icon:
@@ -77,8 +77,12 @@ class BaseButton(Lifecycle.LoomAnimationMixin, QPushButton):
         else:
             super().__init__(text, parent)
 
-        self.fast_clicked          = False
-        self.glitch_effect_enabled = enable_glitch_effect
+        self.fast_clicked         = False
+        self.original_button_text = super().text()
+        self.original_position    = None
+        self.original_size        = None
+        self.glitch_sound_locked  = not enable_glitch_effect
+        self.is_glitching         = False
 
         self.press_scale_handle = ui_engine.bind(
             owner      = self,
@@ -88,18 +92,13 @@ class BaseButton(Lifecycle.LoomAnimationMixin, QPushButton):
             on_change  = self.on_press_scale_changed
         )
 
-        if enable_glitch_effect:
-            self.setup_glitch_effect()
+        self.setup_glitch_effect()
 
         self.pressed.connect(self.animate_press)
         self.released.connect(self.animate_release)
 
     def setup_glitch_effect(self) -> None:
         self.original_button_text = super().text()
-        self.original_position    = None
-        self.original_size        = None
-        self.glitch_sound_locked  = False
-        self.is_glitching         = False
 
         self.glitch_handle = ui_engine.bind(
             owner      = self,
@@ -157,7 +156,7 @@ class BaseButton(Lifecycle.LoomAnimationMixin, QPushButton):
         estimated_length = max(1, min(200, self.width() // average_width))
         frames           = []
 
-        for _ in range(self.glitch_step_count):
+        for step_index in range(self.glitch_step_count):
             frames.append(
                 (
                     self.glitch_step_ms,
@@ -303,7 +302,12 @@ class RectangularButton(BaseButton):
             height:               int | None     = None
         ) -> None:
 
-        super().__init__(text, icon, parent, enable_glitch_effect)
+        super().__init__(
+            text                 = text,
+            icon                 = icon,
+            parent               = parent,
+            enable_glitch_effect = enable_glitch_effect
+        )
 
         resolved_height      = height if height is not None else self.default_height
         resolved_style_sheet = style_sheet if style_sheet is not None else self.default_style_sheet
@@ -472,9 +476,7 @@ class ConfirmButton(ButtonWithOutline):
             Easing.ease_out_cubic
         )
 
-        print(self.elapsed_timer.elapsed(), self.confirmation_timer.interval(), "fuck")
-        tone = self.elapsed_timer.elapsed() / self.confirmation_timer.interval() + 0.7
-        print(tone)
+        tone = (self.elapsed_timer.elapsed() / self.confirmation_timer.interval()) + 0.7
         ui_player.play_sound("Feedback/ConfirmTick", speed = tone)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -601,7 +603,11 @@ class ButtonRow(QHBoxLayout):
 
             self.buttons[text] = button
 
-    def unpack_button_item(self, item: tuple) -> tuple:
+    def unpack_button_item(
+            self,
+            item: tuple
+        ) -> tuple:
+
         if len(item) == 4:
             return item
 

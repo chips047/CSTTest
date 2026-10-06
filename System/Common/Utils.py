@@ -285,7 +285,7 @@ def setup_exe_logging(folder_name: str = "Logs", file_name: str = "app.log") -> 
         log_file_path,
         encoding  = "utf-8",
         rotation  = "10 MB",
-        enqueue   = True,
+        enqueue   = False,
         catch     = True,
         backtrace = True,
         diagnose  = True
@@ -579,3 +579,19 @@ def check_dynamic_library(module: object) -> None:
     
     else:
         logger.error(f"{module.__name__} module doesn't use dynamic library and will be slow")
+
+def is_newer_version(
+        remote_version: str,
+        local_version:  str
+    ) -> bool:
+
+    clean_remote = remote_version.strip().lstrip("vV")
+    clean_local  = local_version.strip().lstrip("vV")
+
+    remote_numbers = [int(token) for token in re.findall(r"\d+", clean_remote)]
+    local_numbers  = [int(token) for token in re.findall(r"\d+", clean_local)]
+
+    if remote_numbers and local_numbers:
+        return remote_numbers > local_numbers
+
+    return clean_remote != clean_local

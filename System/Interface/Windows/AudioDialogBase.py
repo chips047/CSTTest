@@ -184,10 +184,15 @@ class AudioLoadingDialog(FloatingWindowGPU):
 class AudioEditorBase(AudioLoadingDialog):
     def setup_trim_section(self) -> None:
         self.trim_widget        = Widgets.TrimmingWaveformWidget()
+
         self.start_time_textbox = make_time_textbox()
         self.end_time_textbox   = make_time_textbox()
         self.fade_in_textbox    = make_fade_textbox("Fade in (ms)")
         self.fade_out_textbox   = make_fade_textbox("Fade out (ms)")
+
+        self.start_time_textbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.end_time_textbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.fade_out_textbox.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.play_icon  = QIcon("System/Assets/Icons/Audio/Play.png")
         self.pause_icon = QIcon("System/Assets/Icons/Audio/Pause.png")

@@ -7,7 +7,7 @@ import random
 import threading
 import traceback
 
-from datetime import datetime
+from datetime  import datetime
 from functools import partial
 
 from loguru import logger
@@ -693,25 +693,34 @@ class ApplicationWindow(QMainWindow):
             file.write(information)
 
     def show_update_info(self, information: dict[str, object]) -> None:
-        version     = str(information.get("tag_name", "unknown"))
+        version_tag = str(information.get("tag_name", "unknown"))
         changelog   = str(information.get("body", "No changelog available."))
         release_url = str(information.get("html_url", Constants.GITHUB_LINK))
 
-        if version == open(Utils.get_resource_path("version")).read():
+        current_version_file_path = Utils.get_resource_path("version")
+
+        if not os.path.exists(current_version_file_path):
+            return
+
+        with open(current_version_file_path, "r", encoding = "utf-8") as version_file:
+            current_version = version_file.read().strip()
+
+        if not Utils.is_newer_version(version_tag, current_version):
             return
 
         last_notified_version = Constants.current_settings.get("_last_notified_update")
 
-        if version == last_notified_version:
+        if version_tag == last_notified_version:
             return
 
         Windows.UpdateWindow(
-            version,
-            changelog,
-            release_url
+            version             = version_tag,
+            changelog           = changelog,
+            url                 = release_url,
+            release_information = information
         ).exec()
 
-        Constants.current_settings.set_value("_last_notified_update", version)
+        Constants.current_settings.set_value("_last_notified_update", version_tag)
 
     # Animations
 

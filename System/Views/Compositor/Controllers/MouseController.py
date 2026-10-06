@@ -113,6 +113,9 @@ class MouseController:
     # EventDispatching
 
     def process_mouse_press_event(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
         ruler_area = QRectF(
             0,
             0,
@@ -125,7 +128,8 @@ class MouseController:
             event.accept()
             return
 
-        if self.conductor.itemAt(event.pos()):
+        viewport_pos = event.position().toPoint()
+        if self.conductor.itemAt(viewport_pos):
             event.ignore()
             return
 

@@ -54,6 +54,7 @@ class GlyphController(QObject):
         self.glyph_items     = {}
         self.drag_session    = {}
         self.expanded_stack  = None
+        self.caching_active  = True
 
         self.expand_animations      = []
         self.collapse_animations    = []
@@ -481,6 +482,12 @@ class GlyphController(QObject):
 
     # Glyph Management
 
+    def set_caching_active(self, active: bool) -> None:
+        self.caching_active = active
+
+        for item in self.glyph_items.values():
+            item.set_caching_active(active)
+
     def update_glyphs(
             self,
             glyph_ids:        dict[int, dict] | list[int] | None = None,
@@ -702,6 +709,9 @@ class GlyphController(QObject):
 
             self.glyph_items[glyph_id] = item
             self.conductor.scene.addItem(item)
+
+            if not self.caching_active:
+                item.set_caching_active(False)
 
             if set_selected:
                 item.was_clicked = True

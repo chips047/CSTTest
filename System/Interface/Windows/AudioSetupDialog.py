@@ -47,7 +47,6 @@ class AudioSetupDialog(BPMEditorBase):
         self.model_selector.setMinimumWidth(240)
 
         settings_layout = QHBoxLayout()
-        settings_layout.setSpacing(8)
         settings_layout.addWidget(self.bpm_input)
         settings_layout.addWidget(self.model_selector)
         settings_layout.addStretch()

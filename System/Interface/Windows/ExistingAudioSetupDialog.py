@@ -1,6 +1,8 @@
 import os
 import re
 
+from PyQt6.QtCore import Qt
+
 from PyQt6.QtWidgets import (
     QWidget,
     QHBoxLayout
@@ -18,7 +20,7 @@ from System.Interface.Windows import (
     TrimWarningDialog
 )
 
-# Existing Audio Setup Window
+# Existing Audio Setup Dialog
 
 class ExistingAudioSetupDialog(BPMEditorBase):
 
@@ -62,17 +64,15 @@ class ExistingAudioSetupDialog(BPMEditorBase):
         self.ok_button.setMaximumWidth(56)
         self.cancel_button.setMaximumWidth(80)
 
-        self.auto_bpm_button = Widgets.ButtonWithOutline("Auto")
+        self.auto_bpm_button = Widgets.ButtonWithOutline("Auto", enable_glitch_effect = False)
         self.auto_bpm_button.setMaximumWidth(80)
         self.auto_bpm_button.clicked.connect(self.on_auto_detect_bpm)
 
         bpm_layout = QHBoxLayout()
-        bpm_layout.setSpacing(8)
         bpm_layout.addWidget(self.bpm_input)
         bpm_layout.addWidget(self.auto_bpm_button)
 
         settings_layout = QHBoxLayout()
-        settings_layout.setSpacing(8)
         settings_layout.addLayout(bpm_layout)
         settings_layout.addStretch()
         settings_layout.addWidget(self.cancel_button)
@@ -84,7 +84,11 @@ class ExistingAudioSetupDialog(BPMEditorBase):
 
     # Width Calculation
 
-    def calculate_collapsed_width(self, bpm_text: str) -> int:
+    def calculate_collapsed_width(
+            self,
+            bpm_text: str
+        ) -> int:
+
         clean_text   = str(bpm_text or "").strip() or "120"
         font_metrics = self.bpm_input.fontMetrics()
 
@@ -92,83 +96,81 @@ class ExistingAudioSetupDialog(BPMEditorBase):
 
     # BPM State Management
 
-    def apply_bpm(self, bpm_value: int) -> None:
+    def apply_bpm(
+            self,
+            bpm_value: int
+        ) -> None:
+
         bpm_text     = str(bpm_value)
         target_width = self.calculate_collapsed_width(bpm_text)
 
+        self.bpm_animation_timer.stop()
+        self.bpm_remove_timer.stop()
+
         self.bpm_input.setText(bpm_text)
+        self.bpm_input.setPlaceholderText("BPM")
         self.bpm_input.setFixedWidth(target_width)
+        self.bpm_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         Player.bpm_informer.set_bpm(int(bpm_value))
 
     def apply_saved_bpm_state(self) -> None:
         self.apply_bpm(int(self.composition.bpm))
 
-    def apply_auto_bpm(self, bpm_value: int) -> None:
-        self.auto_bpm_requested = False
+    def apply_auto_bpm(
+            self,
+            bpm_value: int
+        ) -> None:
 
+        self.auto_bpm_requested = False
         self.apply_bpm(bpm_value)
 
     # BPM Pipeline Handlers
 
-    def process_bpm_detection(
+    def bpm_ready(
             self,
-            *arguments,
-            **keyword_arguments
+            bpm:           float,
+            snapped_times: list | None
         ) -> None:
-        for argument in list(arguments) + list(keyword_arguments.values()):
-            if isinstance(argument, (int, float)) and 20 <= argument <= 400:
-                self.detected_bpm = int(argument)
-                return
 
-    def bpm_end_animation(
-            self,
-            *arguments,
-            **keyword_arguments
-        ) -> None:
-        self.process_bpm_detection(*arguments, **keyword_arguments)
+        self.snapped_times = snapped_times
+        self.bpm_animation_timer.stop()
 
-        if self.auto_bpm_requested or not self.composition.bpm:
-            self.auto_bpm_requested = False
+        if not bpm:
+            self.detected_bpm = None
 
-            super().bpm_end_animation(*arguments, **keyword_arguments)
+            if self.auto_bpm_requested:
+                self.auto_bpm_requested = False
+                self.bpm_input.setPlaceholderText("Counting BPM FAILURE")
 
             return
 
-        return
+        bpm_value         = round(bpm)
+        self.detected_bpm = bpm_value
 
-    def on_bpm_detected(self, bpm_value: int) -> None:
-        self.detected_bpm = int(bpm_value)
-
-        if self.auto_bpm_requested or not self.composition.bpm:
+        if self.auto_bpm_requested:
             self.apply_auto_bpm(bpm_value)
 
+    def on_auto_detect_bpm(self) -> None:
+        if self.detected_bpm is not None and self.get_bpm_value() == self.detected_bpm:
+            self.auto_bpm_button.start_glitch()
+            self.bpm_input.start_glitch()
             return
 
-        return
-
-    def on_bpm_calculated(self, bpm_value: int) -> None:
-        self.on_bpm_detected(bpm_value)
-
-    def on_bpm_ready(self, bpm_value: int) -> None:
-        self.on_bpm_detected(bpm_value)
-
-    def on_auto_detect_bpm(self) -> None:
         if self.detected_bpm is not None:
             self.apply_auto_bpm(self.detected_bpm)
             return
 
         self.auto_bpm_requested = True
 
-        self.bpm_input.setMinimumWidth(110)
-        self.bpm_input.setMaximumWidth(130)
         self.bpm_input.setText("")
         self.bpm_input.setPlaceholderText("Counting BPM...")
+        self.bpm_input.setFixedWidth(130)
 
-        if self.is_bpm_thread_running():
-            return
+        if not self.is_bpm_thread_running():
+            self.start_bpm_pipeline()
 
-        self.start_bpm_pipeline()
+        self.bpm_animation_timer.start()
 
     # Audio Pipeline Handlers
 
@@ -190,20 +192,20 @@ class ExistingAudioSetupDialog(BPMEditorBase):
     # Value Retrieval
 
     def get_bpm_value(self) -> int:
-        bpm_text = str(self.bpm_input.text() or "").strip()
+        clean_text = str(self.bpm_input.text() or "").strip()
 
-        if bpm_text.isdigit():
-            return int(bpm_text)
+        if clean_text.isdigit():
+            return int(clean_text)
 
-        placeholder = str(self.bpm_input.placeholderText() or "")
-        digits      = re.findall(r"(\d+)", placeholder)
+        placeholder_text = str(self.bpm_input.placeholderText() or "")
+        digits           = re.findall(r"(\d+)", placeholder_text)
 
         if digits:
             return int(digits[-1])
 
         return int(self.composition.bpm or 120)
 
-    # Action Handlers
+    # Actions
 
     def accept_callback(self) -> None:
         if not self.validate_trim():

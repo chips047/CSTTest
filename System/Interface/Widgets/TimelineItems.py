@@ -305,13 +305,15 @@ class MarqueeItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
             option:  QStyleOptionGraphicsItem,
             widget:  QWidget | None = None
         ) -> None:
+
         brush_alpha = self.brush_opacity_handle.value
         pen_alpha   = self.pen_opacity_handle.value
         start_point = self.start_position_handle.value
         mouse_point = self.mouse_point_handle.value
 
         rectangle = QRectF(start_point, mouse_point).normalized()
-        radius_px = min((rectangle.width() + rectangle.height()) / 12, 10)
+        min_side  = min(rectangle.width(), rectangle.height())
+        radius_px = min(min_side / 4.0, 10.0)
 
         self.cached_brush_color.setAlpha(self.apply_bpm_to_alpha(50, brush_alpha))
         self.cached_brush = QBrush(self.cached_brush_color)
@@ -467,6 +469,7 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         self.glyph_id  = glyph_id
         self.conductor = conductor
 
+        self.caching_enabled        = True
         self.was_clicked            = False
         self.border_width_px        = 2
         self.keyframe_line_padding  = 12
@@ -589,7 +592,7 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
             QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
 
-        self.setCacheMode(QGraphicsItem.CacheMode.ItemCoordinateCache)
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.setAcceptHoverEvents(True)
 
     def setup_keyframes(self) -> None:
@@ -598,8 +601,6 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         self.fade_initial_keyframes = list(self.pending_fade_keyframes)
         self.fade_is_dragging       = False
         self.fade_dragged_index     = None
-
-    # Setup
 
     def setup_animations(self) -> None:
         self.animation_margin_px       = 0.0
@@ -1249,7 +1250,11 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         self.is_resizing_width = False
 
     def fade_out_callback(self) -> None:
-        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+        if self.caching_enabled:
+            self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+
+        else:
+            self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
 
         if self.is_animating:
             self.set_animating(False)
@@ -1353,17 +1358,16 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
                 controller = self.conductor.glyph_controller
                 controller.glyph_keyframe_edited.emit()
                 self.handle_fade_delete(event)
-
+                event.accept()
                 return
 
-            self.marquee_select_animation()
-            super().mousePressEvent(event)
+            if not self.isSelected():
+                if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                    self.scene().clearSelection()
+                
+                self.setSelected(True)
 
-            return
-
-        if event.button() != Qt.MouseButton.LeftButton:
-            super().mousePressEvent(event)
-
+            event.accept()
             return
 
         self.capture_current_visual_state()
@@ -1475,9 +1479,6 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
             return [self]
 
         return selected_items
-
-    def set_is_occluded(self, state: bool) -> None:
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemHasNoContents, state)
 
     def standard_press(self, event: QGraphicsSceneMouseEvent) -> None:
         self.drag_start_position = event.scenePos()
@@ -1806,6 +1807,19 @@ class GlyphItem(Lifecycle.LoomAnimationMixin, QGraphicsObject):
         return (-normalized_y * 25, -normalized_x * max_tilt_y)
 
     # Glyph API Section
+
+    def set_caching_active(self, active: bool) -> None:
+        self.caching_enabled = active
+
+        if not active or self.isSelected():
+            self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
+
+            return
+
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+
+    def set_is_occluded(self, state: bool) -> None:
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemHasNoContents, state)
 
     def update_drag_geometry(self) -> None:
         target_x_px     = self.ms_to_px(self.start_ms)
