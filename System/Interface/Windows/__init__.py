@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from System.Interface.Windows.FloatingWindowGPU        import FloatingWindowGPU
 
 from System.Interface.Windows.Helpers import (

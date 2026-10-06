@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from time import monotonic
 from random import randint
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import sys
@@ -522,7 +524,7 @@ class UpdateChecker(QObject):
         self.manager.finished.connect(self.on_request_finished)
 
     def fetch_latest_release(self) -> None:
-        url     = QUrl("https://api.github.com/repos/chips047/Cassette/releases")
+        url     = QUrl("https://api.github.com/repos/chips047/CSTTest/releases")
         request = QNetworkRequest(url)
         
         request.setAttribute(QNetworkRequest.Attribute.User, "get_release")

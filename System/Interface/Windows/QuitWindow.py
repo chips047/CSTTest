@@ -261,9 +261,6 @@ class QuitWindow(FloatingWindowGPU):
     def __init__(self) -> None:
         super().__init__("Quit?", enable_audioplayer_effects = False)
 
-        import sys
-        sys.exit(0)
-
         self.error_windows       = []
         self.is_angry            = False
         self.is_collapsing       = False

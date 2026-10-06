@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from loguru import logger
 
 from PyQt6.QtCore import (

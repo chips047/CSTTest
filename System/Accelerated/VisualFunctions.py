@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy
 
 #pythran export process_waveform_tile(float32[:,:], int, float, float, float, float)

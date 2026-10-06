@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 def make_button_style(
         bg_color:          str,
         hover_color:       str,
